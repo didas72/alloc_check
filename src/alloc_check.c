@@ -8,6 +8,7 @@
  */
 
 
+
 //Allow the use of standard alloc, realloc and free
 #define ALLOW_STANDARD_MEM
 #include "alloc_check.h"
@@ -17,8 +18,10 @@
 #include <string.h>
 
 
+
 #define DIE do { fprintf(stderr, "alloc_check encountered a fatal error.\n"); exit(72); } while (0)
 #define DIE_NULL(ptr) do { if (ptr == NULL) DIE; } while (0)
+
 
 
 //===Required structures===
@@ -56,7 +59,7 @@ static void ensure_voidptr_array(voidptr_array *arr, size_t capacity)
 	if (arr->capacity >= capacity) return;
 
 	if (arr->capacity < VOIDPTRARR_DEFAULT_CAP) arr->capacity = VOIDPTRARR_DEFAULT_CAP;
-	while (arr->capacity < capacity) arr->capacity << 1;
+	while (arr->capacity < capacity) arr->capacity <<= 1;
 
 	void **tmp = realloc(arr->data, arr->capacity * sizeof(void *));
 	DIE_NULL(tmp);
@@ -156,12 +159,12 @@ memory_entry *create_memory_entry(int type, size_t id, void *ptr, size_t size, c
 {
 	memory_entry *entry = malloc(sizeof(memory_entry));
 	DIE_NULL(entry);
-	char *name = malloc(strlen(file_name));
+	char *name = malloc(strlen(file_name) + 1);
 	DIE_NULL(name);
 	strcpy(name, file_name);
 
 	entry->id = id;
-	entry->type = ENTRY_ALLOC;
+	entry->type = type;
 	entry->ptr = ptr;
 	entry->size = size;
 	entry->file_name = name;
@@ -178,6 +181,8 @@ void destroy_memory_entry(memory_entry *entry)
 
 
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuse-after-free"
 void *checked_malloc(size_t size, char *file_name, int line)
 {
 	init_checker();
@@ -223,23 +228,52 @@ void checked_free(void *ptr, char *file_name, int line)
 	append_voidptr_array(status.frees, entry);
 	append_voidptr_array(status.entry_lookup->data[id], entry);
 }
+#pragma GCC diagnostic pop
 
 
 
 void report_alloc_checks()
 {
-	//Calculate metrics
-	size_t allocs = status.allocs->count, reallocs = status.reallocs->count, frees = status.frees->count;
-	size_t blocksLost, memoryLost;
+	init_checker();
 
+	//Calculate metrics
+	size_t allocs = status.allocs->count;
+	size_t reallocs = status.reallocs->count;
+	size_t frees = status.frees->count;
+
+	//TODO: Calculate below
+	size_t blocks_lost, memory_lost;
+	size_t zero_allocs, zero_reallocs;
+	size_t invalid_reallocs, invalid_frees;
+	size_t failed_allocs, failed_reallocs;
+
+	//Internally 60 cols wide (62 external)
+	//Minimum height is 17 rows (+2 empty)
 	printf("\n\n");
-	printf("+========alloc_check report========+\n");
-	printf("+--Statistics----------------------+\n");
-	printf("|Total allocs/reallocs/frees:      |\n");
-	printf("| => % 5ld/% 5ld/% 5ld             |\n", allocs, reallocs, frees);
-	printf("|Blocks lost: % 5ld                |\n", blocksLost);
-	printf("|Memory lost: % 5ld                |\n", memoryLost);
-	printf("+==================================+\n");
+	printf("+================alloc_check report================+\n");
+	printf("+--Statistics--------------------------------------+\n");
+	printf("|Total allocs/reallocs/frees: %05ld/%05ld/%05ld    |\n", allocs, reallocs, frees);
+	printf("|Blocks lost: %05ld                                |\n", blocks_lost);
+	printf("|Total memory lost: ~%05ld kB                      |\n", memory_lost >> 10); //TODO: Variable unit (B, kB, MB)
+	printf("|Total zero-sized allocs/reallocs: %05ld/%05ld     |\n", zero_allocs, zero_reallocs);
+	printf("|Total invalid reallocs/frees: %05ld/%05ld         |\n", invalid_reallocs, invalid_frees);
+	printf("|Total failed allocs/reallocs: %05ld/%05ld         |\n", failed_allocs, failed_reallocs);
+	printf("|Note: Failed (re)allocs may not be your fault.    |\n");
+	printf("+--Missing frees-----------------------------------+\n");
+	//TODO: List missing frees (size, alloc file/line, list reallocs applied)
+	printf("+--Invalid operations------------------------------+\n");
+	//TODO: List zero-sized allocs
+	//TODO: List zero-sized reallocs
+	//TODO: List invalid reallocs
+	//TODO: List invalid frees
+	printf("|Note: Failed frees might be caused by freeing the |\n");
+	printf("|      same memory more than once.                 |\n");
+	printf("|Note: Failed reallocs might occur if the returned |\n");
+	printf("|      pointers are not kept (not updating ptrs).  |\n");
+	printf("+--Failed (re)allocations--------------------------+\n");
+	//TODO: List failed allocs
+	//TODO: List failed reallocs
+	printf("+==================================================+\n");
 }
 
 //Allocs create new id
