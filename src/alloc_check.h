@@ -31,8 +31,7 @@ void *checked_malloc(size_t size, char *file_name, int line);
 void *checked_realloc(void *ptr, size_t size, char *file_name, int line);
 void checked_free(void *ptr, char *file_name, int line);
 
-//TODO: Init function
-//TODO: Report function
+void report_alloc_checks();
 //TODO: Full history function
 
 #endif
