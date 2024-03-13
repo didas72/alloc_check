@@ -8,7 +8,6 @@ OBJ=build/obj
 BIN=build/bin
 
 OUTBIN=$(BIN)/main
-TESTBIN=$(BIN)/tester
 
 SRCS=$(wildcard $(SRC)/*.c)
 OBJS=$(patsubst $(SRC)/%.c, $(OBJ)/%.o, $(SRCS))
@@ -36,11 +35,11 @@ $(OBJ)/%.o: $(SRC)/%.c
 
 
 
-debug: $(TESTBIN)
-	gdb ./$(TESTBIN)
+debug: $(OUTBIN)
+	gdb ./$(OUTBIN)
 
-memleak: $(TESTBIN)
-	valgrind $(VAL_FLAGS) $(TESTBIN)
+memleak: $(OUTBIN)
+	valgrind $(VAL_FLAGS) $(OUTBIN)
 
 
 clean:

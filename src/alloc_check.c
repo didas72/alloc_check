@@ -24,6 +24,63 @@
 
 
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+static char __format_size_buff[6+1];
+static char *format_size(size_t size)
+{
+	char *unit = "!?";
+	size_t shown_size = 99999;
+
+	if (size > 0x20000000000000)
+	{
+		unit = "PB";
+		shown_size = size >> 50;
+	}
+	else if (size > 0x80000000000)
+	{
+		unit = "TB";
+		shown_size = size >> 40;
+	}
+	else if (size > 0x200000000)
+	{
+		unit = "GB";
+		shown_size = size >> 30;
+	}
+	else if (size > 0x800000)
+	{
+		unit = "MB";
+		shown_size = size >> 20;
+	}
+	else if (size > 0x10000)
+	{
+		unit = "kB";
+		shown_size = size >> 10;
+	}
+	else
+	{
+		snprintf(__format_size_buff, 7, "%ldB", size);
+		return __format_size_buff;
+	}
+
+	snprintf(__format_size_buff, 7, "%ld%s", shown_size, unit);
+	return __format_size_buff;
+}
+static char __format_file_line_buff[25+1];
+static char *format_file_line(char *file_name, int line)
+{
+	size_t file_name_len = strlen(file_name);
+
+	if (file_name_len <= 20)
+		snprintf(__format_file_line_buff, 25, "%s:%d", file_name, line);
+	else
+		snprintf(__format_file_line_buff, 25, "%.17s...:%d", file_name, line);
+
+	return __format_file_line_buff;
+}
+#pragma GCC diagnostic pop
+
+
 //===Required structures===
 //Implements needed data structures
 #define VOIDPTRARR_DEFAULT_CAP 4
@@ -89,9 +146,9 @@ static void append_voidptr_array(voidptr_array *arr, void *data)
 enum ENTRY_TYPE
 {
 	ENTRY_NVAL = 0,
-	ENTRY_ALLOC,
-	ENTRY_REALLOC,
-	ENTRY_FREE,
+	ENTRY_ALLOC = 1,
+	ENTRY_REALLOC = 2,
+	ENTRY_FREE = 3,
 };
 
 typedef struct
@@ -177,6 +234,14 @@ void destroy_memory_entry(memory_entry *entry)
 {
 	free(entry->file_name);
 	free(entry);
+}
+
+char *entry_type_str(int type)
+{
+	if (type == 1) return "MALLOC";
+	if (type == 2) return "REALLOC";
+	if (type == 3) return "FREE";
+	return "";
 }
 
 
@@ -313,21 +378,25 @@ static void print_missing_frees(size_t *block_array, size_t block_count)
 {
 	if (block_count == 0)
 	{
-		printf("| No missing frees                                 |\n");
+		printf("| No missing frees.                                |\n");
 		return;
 	}
 
 	//TODO: Later print as missing frees (use ids to list reallocs)
-
+	//Skip NULL (id=0)
 	for (size_t i = 0; i < block_count; i++)
 	{
-		voidptr_array *entries = status.entry_lookup->data[i];
-		printf("%p\n", entries);
-		memory_entry *last_entry = entries->data[entries->count - 1];//FIXME: reading invalid pointers
-		printf("%p\n", last_entry);
-		size_t block_size = last_entry->size;
+		size_t block = block_array[i];
+		voidptr_array *entries = status.entry_lookup->data[block];
+		memory_entry *entry = entries->data[entries->count - 1];
 
-		printf("|#%05ld: %05ld%3s, %05ld entries:                  |\n", i, block_size, "B", entries->count);
+		printf("|Block #%-5ld: %-6s, has %-5ld entries:          |\n", i, format_size(entry->size), entries->count);
+
+		for (size_t j = 0; j < entries->count; j++)
+		{
+			entry = entries->data[j];
+			printf("| -> %-7s, %-6s at %-25s  |\n", entry_type_str(entry->type), format_size(entry->size), format_file_line(entry->file_name, entry->line));
+		}
 	}
 }
 
@@ -376,7 +445,7 @@ void report_alloc_checks()
 	printf("+--Statistics--------------------------------------+\n");
 	printf("|Total allocs/reallocs/frees: %05ld/%05ld/%05ld    |\n", allocs, reallocs, frees);
 	printf("|Blocks lost: %05ld                                |\n", blocks_lost);
-	printf("|Total memory lost: ~%05ld%3s                      |\n", memory_lost >> 10, "kB"); //TODO: Variable unit (B, kB, MB)
+	printf("|Total memory lost: ~%-6s                        |\n", format_size(memory_lost)); //TODO: Variable unit (B, kB, MB)
 	printf("|Total zero-sized allocs/reallocs: %05ld/%05ld     |\n", zero_allocs, zero_reallocs);
 	printf("|Total invalid reallocs/frees: %05ld/%05ld         |\n", invalid_reallocs, invalid_frees);
 	printf("|Total failed allocs/reallocs: %05ld/%05ld         |\n", failed_allocs, failed_reallocs);
