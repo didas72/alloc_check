@@ -1,5 +1,5 @@
 CC=gcc
-C_FLAGS=-O3 -Wall -Wextra -Wno-unused-result
+C_FLAGS=-O3 -Wall -Wextra -Wno-unused-result -g
 VAL_FLAGS=--leak-check=full
 
 SRC=src
