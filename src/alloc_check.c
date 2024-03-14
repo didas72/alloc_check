@@ -185,7 +185,7 @@ typedef struct
 	size_t id;
 	int type;
 
-	void *new_ptr, *old_ptr;
+	void *old_ptr, *new_ptr;
 	size_t size;
 	char *file_name;
 	int line;
@@ -251,6 +251,7 @@ memory_entry *create_memory_entry(int type, size_t id, void *old_ptr, void *new_
 
 	entry->id = id;
 	entry->type = type;
+	entry->old_ptr = old_ptr;
 	entry->new_ptr = new_ptr;
 	entry->size = size;
 	entry->file_name = name;
@@ -360,6 +361,8 @@ void checked_free(void *ptr, char *file_name, int line)
 	memory_entry *entry = create_memory_entry(ENTRY_FREE, id, ptr, NULL, 0, file_name, line);
 	append_voidptr_array(status.frees, entry);
 	append_voidptr_array(status.entry_lookup->data[id], entry);
+
+	//TODO: Trim array
 }
 #pragma GCC diagnostic pop
 
@@ -598,71 +601,6 @@ static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
 	}
 }
 
-static void find_nval_reallocs_frees(size_t *invalid_reallocs, size_t *invalid_frees)
-{
-	size_t reallocs = 0;
-	size_t frees = 0;
-	voidptr_array *null_block = status.entry_lookup->data[0];
-
-	for (size_t i = 0; i < null_block->count; i++)
-	{
-		memory_entry *entry = null_block->data[i];
-
-		if (entry->type == ENTRY_REALLOC && entry->old_ptr != NULL) reallocs++;
-		else if (entry->type == ENTRY_FREE && entry->old_ptr != NULL) frees++;
-	}
-
-	*invalid_reallocs = reallocs;
-	*invalid_frees = frees;
-}
-static void print_nval_reallocs(size_t invalid_reallocs)
-{
-	//TODO: Later print as invalid reallocs
-	if (invalid_reallocs == 0)
-	{
-		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
-		printf("| No invalid reallocs.                                                 |\n");
-		return;
-	}
-
-	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
-	printf("| ===Invalid reallocs===                                               |\n");
-
-	voidptr_array *null_block = status.entry_lookup->data[0];
-
-	set_color(COLOR_RED, COLOR_DEFAULT, 0);
-	for (size_t i = 0; i < null_block->count; i++)
-	{
-		memory_entry *entry = null_block->data[i];
-
-		if (entry->type == ENTRY_REALLOC && entry->old_ptr != NULL)
-			printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->old_ptr, format_file_line(entry->file_name, entry->line));
-	}
-}
-static void print_nval_frees(size_t invalid_frees)
-{
-	//TODO: Later print as invalid reallocs
-	if (invalid_frees == 0)
-	{
-		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
-		printf("| No invalid frees.                                                    |\n");
-		return;
-	}
-
-	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
-	printf("| ===Invalid frees===                                                  |\n");
-
-	voidptr_array *null_block = status.entry_lookup->data[0];
-
-	set_color(COLOR_RED, COLOR_DEFAULT, 0);
-	for (size_t i = 0; i < null_block->count; i++)
-	{
-		memory_entry *entry = null_block->data[i];
-
-		if (entry->type == ENTRY_FREE && entry->old_ptr != NULL)
-			printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->old_ptr, format_file_line(entry->file_name, entry->line));
-	}
-}
 
 
 void report_alloc_checks()
@@ -680,9 +618,6 @@ void report_alloc_checks()
 	size_t zero_allocs, zero_reallocs, *zero_allocs_v, *zero_reallocs_v;
 	find_zero_re_allocs(&zero_allocs_v, &zero_reallocs_v, &zero_allocs, &zero_reallocs);
 	//TODO: Later print as zero-sized reallocs (use ids to show ops if returned pointer is not NULL)
-
-	size_t invalid_reallocs, invalid_frees;
-	find_nval_reallocs_frees(&invalid_reallocs, &invalid_frees);
 
 	//TODO: Find failed allocs (id=0)
 	//TODO: Count entries
@@ -706,8 +641,6 @@ void report_alloc_checks()
 	printf("|Total allocs/reallocs/frees: %-5ld/%-5ld/%-5ld                        |\n", allocs, reallocs, frees);
 	printf("|Total blocks/memory lost: %-5ld/~%-6s                               |\n", blocks_lost, format_size(memory_lost));
 	printf("|Total zero-sized allocs/reallocs: %-5ld/%-5ld                         |\n", zero_allocs, zero_reallocs);
-	//libc invokes abort on invalid realloc/free
-	printf("|Total invalid reallocs/frees: %-5ld/%-5ld                             |\n", invalid_reallocs, invalid_frees);
 	printf("|Total failed allocs/reallocs: %-5ld/%-5ld                             |\n", failed_allocs, failed_reallocs);
 	printf("|Total NULL reallocs/frees: %-5ld/%-5ld                                |\n", null_reallocs, null_frees);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
@@ -717,12 +650,6 @@ void report_alloc_checks()
 	printf("+--Invalid operations--------------------------------------------------+\n");
 	print_zero_allocs(zero_allocs_v, zero_allocs);
 	print_zero_reallocs(zero_reallocs_v, zero_reallocs);
-	print_nval_reallocs(invalid_reallocs);
-	print_nval_frees(invalid_frees);
-	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
-	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
-	//TODO: List invalid reallocs
-	//TODO: List invalid frees
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Failed (re)allocations----------------------------------------------+\n");
 	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
@@ -730,6 +657,7 @@ void report_alloc_checks()
 	//TODO: List failed reallocs
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Possible mistakes---------------------------------------------------+\n");
+	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
 	//TODO: List NULL reallocs
 	//TODO: List NULL frees
 	printf("+======================================================================+\n");
@@ -738,4 +666,32 @@ void report_alloc_checks()
 	free(lost_blocks_v);
 	free(zero_allocs_v);
 	free(zero_reallocs_v);
+}
+
+void cleanup_alloc_checks()
+{
+	for (size_t i = 0; i < status.allocs->count; i++)
+		destroy_memory_entry(status.allocs->data[i]);
+
+	for (size_t i = 0; i < status.reallocs->count; i++)
+		destroy_memory_entry(status.reallocs->data[i]);
+
+	for (size_t i = 0; i < status.frees->count; i++)
+		destroy_memory_entry(status.frees->data[i]);
+
+	for (size_t i = 0; i < status.entry_lookup->count; i++)
+		destroy_voidptr_array(status.entry_lookup->data[i]);
+
+	destroy_voidptr_array(status.allocs);
+	destroy_voidptr_array(status.reallocs);
+	destroy_voidptr_array(status.frees);
+	destroy_voidptr_array(status.pointers);
+	destroy_voidptr_array(status.entry_lookup);
+
+	status.id_counter = 0;
+	status.allocs = NULL;
+	status.reallocs = NULL;
+	status.frees = NULL;
+	status.pointers = NULL;
+	status.entry_lookup = NULL;
 }

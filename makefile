@@ -1,6 +1,6 @@
 CC=gcc
 C_FLAGS=-O3 -Wall -Wextra -Wno-unused-result -g
-VAL_FLAGS=--leak-check=full
+VAL_FLAGS=--leak-check=full --track-origins=yes -s
 
 SRC=src
 TEST=tests
