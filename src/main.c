@@ -17,6 +17,9 @@ int main()
 
 	int *arr5 = CHKD_MALLOC(sizeof(int) * (1ul << 40));
 
+	CHKD_FREE(NULL);
+	CHKD_REALLOC(NULL, 20);
+
 	(void)arr1;
 	(void)arr2;
 	(void)arr3;
