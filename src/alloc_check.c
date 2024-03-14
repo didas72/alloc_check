@@ -185,7 +185,7 @@ typedef struct
 	size_t id;
 	int type;
 
-	void *ptr;
+	void *new_ptr, *old_ptr;
 	size_t size;
 	char *file_name;
 	int line;
@@ -241,7 +241,7 @@ static size_t find_id(void *ptr)
 
 
 
-memory_entry *create_memory_entry(int type, size_t id, void *ptr, size_t size, char *file_name, int line)
+memory_entry *create_memory_entry(int type, size_t id, void *old_ptr, void *new_ptr, size_t size, char *file_name, int line)
 {
 	memory_entry *entry = malloc(sizeof(memory_entry));
 	DIE_NULL(entry);
@@ -251,7 +251,7 @@ memory_entry *create_memory_entry(int type, size_t id, void *ptr, size_t size, c
 
 	entry->id = id;
 	entry->type = type;
-	entry->ptr = ptr;
+	entry->new_ptr = new_ptr;
 	entry->size = size;
 	entry->file_name = name;
 	entry->line = line;
@@ -290,12 +290,12 @@ void *checked_malloc(size_t size, char *file_name, int line)
 	if (ptr == NULL)
 	{
 		id = 0;
-		entry = create_memory_entry(ENTRY_MALLOC, id, ptr, size, file_name, line);
+		entry = create_memory_entry(ENTRY_MALLOC, id, NULL, ptr, size, file_name, line);
 	}
 	else
 	{
 		id = status.id_counter++;
-		entry = create_memory_entry(ENTRY_MALLOC, id, ptr, size, file_name, line);
+		entry = create_memory_entry(ENTRY_MALLOC, id, NULL, ptr, size, file_name, line);
 		append_voidptr_array(status.pointers, ptr); //add index to pointer matching
 		append_voidptr_array(status.entry_lookup, create_voidptr_array()); //create lookup for new id
 	}
@@ -317,12 +317,12 @@ void *checked_calloc(size_t nitems, size_t size, char *file_name, int line)
 	if (ptr == NULL)
 	{
 		id = 0;
-		entry = create_memory_entry(ENTRY_CALLOC, id, ptr, size, file_name, line);
+		entry = create_memory_entry(ENTRY_CALLOC, id, NULL, ptr, size, file_name, line);
 	}
 	else
 	{
 		id = status.id_counter++;
-		entry = create_memory_entry(ENTRY_CALLOC, id, ptr, nitems * size, file_name, line);
+		entry = create_memory_entry(ENTRY_CALLOC, id, NULL, ptr, nitems * size, file_name, line);
 		append_voidptr_array(status.pointers, ptr); //add index to pointer matching
 		append_voidptr_array(status.entry_lookup, create_voidptr_array()); //create lookup for new id
 	}
@@ -339,7 +339,7 @@ void *checked_realloc(void *ptr, size_t size, char *file_name, int line)
 	void *new_ptr = realloc(ptr, size);
 
 	size_t id = find_id(ptr);
-	memory_entry *entry = create_memory_entry(ENTRY_REALLOC, id, new_ptr, size, file_name, line);
+	memory_entry *entry = create_memory_entry(ENTRY_REALLOC, id, ptr, new_ptr, size, file_name, line);
 	append_voidptr_array(status.reallocs, entry);
 
 	//update id to pointer matching, if not null or unlisted
@@ -357,7 +357,7 @@ void checked_free(void *ptr, char *file_name, int line)
 	free(ptr);
 
 	size_t id = find_id(ptr);
-	memory_entry *entry = create_memory_entry(ENTRY_FREE, id, ptr, 0, file_name, line);
+	memory_entry *entry = create_memory_entry(ENTRY_FREE, id, ptr, NULL, 0, file_name, line);
 	append_voidptr_array(status.frees, entry);
 	append_voidptr_array(status.entry_lookup->data[id], entry);
 }
@@ -452,7 +452,7 @@ static void print_missing_frees(size_t *block_array, size_t block_count)
 		for (size_t j = 0; j < entries->count; j++)
 		{
 			entry = entries->data[j];
-			printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+			printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
 		}
 	}
 }
@@ -550,12 +550,12 @@ static void print_zero_allocs(size_t *block_array, size_t zero_alloc_count)
 			if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size == 0)
 			{
 				set_color(COLOR_RED, COLOR_DEFAULT, 0);
-				printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+				printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
 			}
 			else
 			{
 				set_color(COLOR_CYAN, COLOR_DEFAULT, 0);
-				printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+				printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
 			}
 		}
 	}
@@ -587,18 +587,18 @@ static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
 			if (entry->type == ENTRY_REALLOC && entry->size == 0)
 			{
 				set_color(COLOR_RED, COLOR_DEFAULT, 0);
-				printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+				printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->old_ptr, format_file_line(entry->file_name, entry->line));
 			}
 			else
 			{
 				set_color(COLOR_CYAN, COLOR_DEFAULT, 0);
-				printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+				printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->old_ptr, format_file_line(entry->file_name, entry->line));
 			}
 		}
 	}
 }
 
-static void find_invalid_reallocs_frees(size_t *invalid_reallocs, size_t *invalid_frees)
+static void find_nval_reallocs_frees(size_t *invalid_reallocs, size_t *invalid_frees)
 {
 	size_t reallocs = 0;
 	size_t frees = 0;
@@ -608,12 +608,60 @@ static void find_invalid_reallocs_frees(size_t *invalid_reallocs, size_t *invali
 	{
 		memory_entry *entry = null_block->data[i];
 
-		if (entry->type == ENTRY_REALLOC) reallocs++;
-		else if (entry->type == ENTRY_FREE) frees++;
+		if (entry->type == ENTRY_REALLOC && entry->old_ptr != NULL) reallocs++;
+		else if (entry->type == ENTRY_FREE && entry->old_ptr != NULL) frees++;
 	}
 
 	*invalid_reallocs = reallocs;
 	*invalid_frees = frees;
+}
+static void print_nval_reallocs(size_t invalid_reallocs)
+{
+	//TODO: Later print as invalid reallocs
+	if (invalid_reallocs == 0)
+	{
+		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
+		printf("| No invalid reallocs.                                                 |\n");
+		return;
+	}
+
+	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
+	printf("| ===Invalid reallocs===                                               |\n");
+
+	voidptr_array *null_block = status.entry_lookup->data[0];
+
+	set_color(COLOR_RED, COLOR_DEFAULT, 0);
+	for (size_t i = 0; i < null_block->count; i++)
+	{
+		memory_entry *entry = null_block->data[i];
+
+		if (entry->type == ENTRY_REALLOC && entry->old_ptr != NULL)
+			printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->old_ptr, format_file_line(entry->file_name, entry->line));
+	}
+}
+static void print_nval_frees(size_t invalid_frees)
+{
+	//TODO: Later print as invalid reallocs
+	if (invalid_frees == 0)
+	{
+		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
+		printf("| No invalid frees.                                                    |\n");
+		return;
+	}
+
+	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
+	printf("| ===Invalid frees===                                                  |\n");
+
+	voidptr_array *null_block = status.entry_lookup->data[0];
+
+	set_color(COLOR_RED, COLOR_DEFAULT, 0);
+	for (size_t i = 0; i < null_block->count; i++)
+	{
+		memory_entry *entry = null_block->data[i];
+
+		if (entry->type == ENTRY_FREE && entry->old_ptr != NULL)
+			printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->old_ptr, format_file_line(entry->file_name, entry->line));
+	}
 }
 
 
@@ -633,14 +681,8 @@ void report_alloc_checks()
 	find_zero_re_allocs(&zero_allocs_v, &zero_reallocs_v, &zero_allocs, &zero_reallocs);
 	//TODO: Later print as zero-sized reallocs (use ids to show ops if returned pointer is not NULL)
 
-	//TODO: Find invalid reallocs (id=0)
-	//TODO: Count entries
-	//TODO: Later print as invalid reallocs
-	//TODO: Find invalid frees (id=0)
-	//TODO: Count entries
-	//TODO: Later print as invalid frees
 	size_t invalid_reallocs, invalid_frees;
-	find_invalid_reallocs_frees(&invalid_reallocs, &invalid_frees);
+	find_nval_reallocs_frees(&invalid_reallocs, &invalid_frees);
 
 	//TODO: Find failed allocs (id=0)
 	//TODO: Count entries
@@ -649,11 +691,14 @@ void report_alloc_checks()
 	//TODO: Count entries
 	//TODO: Later print as failed reallocs (use ids to show alloc and list reallocs)
 	//REMINDER: Ignore zero-sized ops that return NULL, shown separately
-	//REMINDER: Note NULL frees are technically valid
 	size_t failed_allocs = 0, failed_reallocs = 0;
 
-	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
+	//TODO: Find NULL reallocs
+	//TODO: Find NULL frees
+	size_t null_reallocs = 0, null_frees = 0;
+
 	//Internally 70 cols wide (72 external)
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("\n\n");
 	printf("+=========================alloc_check report===========================+\n");
 	printf("+--Statistics----------------------------------------------------------+\n");
@@ -661,8 +706,10 @@ void report_alloc_checks()
 	printf("|Total allocs/reallocs/frees: %-5ld/%-5ld/%-5ld                        |\n", allocs, reallocs, frees);
 	printf("|Total blocks/memory lost: %-5ld/~%-6s                               |\n", blocks_lost, format_size(memory_lost));
 	printf("|Total zero-sized allocs/reallocs: %-5ld/%-5ld                         |\n", zero_allocs, zero_reallocs);
+	//libc invokes abort on invalid realloc/free
 	printf("|Total invalid reallocs/frees: %-5ld/%-5ld                             |\n", invalid_reallocs, invalid_frees);
 	printf("|Total failed allocs/reallocs: %-5ld/%-5ld                             |\n", failed_allocs, failed_reallocs);
+	printf("|Total NULL reallocs/frees: %-5ld/%-5ld                                |\n", null_reallocs, null_frees);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Missing frees-------------------------------------------------------+\n");
 	print_missing_frees(lost_blocks_v, blocks_lost);
@@ -670,6 +717,8 @@ void report_alloc_checks()
 	printf("+--Invalid operations--------------------------------------------------+\n");
 	print_zero_allocs(zero_allocs_v, zero_allocs);
 	print_zero_reallocs(zero_reallocs_v, zero_reallocs);
+	print_nval_reallocs(invalid_reallocs);
+	print_nval_frees(invalid_frees);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
 	//TODO: List invalid reallocs
@@ -680,6 +729,9 @@ void report_alloc_checks()
 	//TODO: List failed allocs
 	//TODO: List failed reallocs
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
+	printf("+--Possible mistakes---------------------------------------------------+\n");
+	//TODO: List NULL reallocs
+	//TODO: List NULL frees
 	printf("+======================================================================+\n");
 	set_color(COLOR_DEFAULT, COLOR_DEFAULT, 0);
 
