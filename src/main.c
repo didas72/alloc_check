@@ -15,7 +15,6 @@ int main()
 	int *tmp4 = CHKD_REALLOC(arr4, 5 * sizeof(int));
 	CHKD_FREE(tmp4);
 
-
 	report_alloc_checks();
 	return 0;
 }

@@ -598,9 +598,22 @@ static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
 	}
 }
 
-static void find_invalid_reallocs_frees(size_t **nval_reallocs_v, size_t **nval_frees_v, size_t *invalid_reallocs, size_t *invalid_frees)
+static void find_invalid_reallocs_frees(size_t *invalid_reallocs, size_t *invalid_frees)
 {
+	size_t reallocs = 0;
+	size_t frees = 0;
+	voidptr_array *null_block = status.entry_lookup->data[0];
 
+	for (size_t i = 0; i < null_block->count; i++)
+	{
+		memory_entry *entry = null_block->data[i];
+
+		if (entry->type == ENTRY_REALLOC) reallocs++;
+		else if (entry->type == ENTRY_FREE) frees++;
+	}
+
+	*invalid_reallocs = reallocs;
+	*invalid_frees = frees;
 }
 
 
@@ -626,8 +639,8 @@ void report_alloc_checks()
 	//TODO: Find invalid frees (id=0)
 	//TODO: Count entries
 	//TODO: Later print as invalid frees
-	size_t invalid_reallocs, invalid_frees, *nval_reallocs_v, *nval_frees_v;
-	find_invalid_reallocs_frees(&nval_reallocs_v, &nval_frees_v, &invalid_reallocs, &invalid_frees);
+	size_t invalid_reallocs, invalid_frees;
+	find_invalid_reallocs_frees(&invalid_reallocs, &invalid_frees);
 
 	//TODO: Find failed allocs (id=0)
 	//TODO: Count entries
@@ -640,7 +653,7 @@ void report_alloc_checks()
 	size_t failed_allocs = 0, failed_reallocs = 0;
 
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
-	//Internally 780 cols wide (72 external)
+	//Internally 70 cols wide (72 external)
 	printf("\n\n");
 	printf("+=========================alloc_check report===========================+\n");
 	printf("+--Statistics----------------------------------------------------------+\n");
@@ -666,7 +679,6 @@ void report_alloc_checks()
 	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
 	//TODO: List failed allocs
 	//TODO: List failed reallocs
-	//TODO: Note failed reallocs can be shown in invalid if zero-sized
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+======================================================================+\n");
 	set_color(COLOR_DEFAULT, COLOR_DEFAULT, 0);
