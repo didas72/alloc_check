@@ -439,16 +439,16 @@ static void print_missing_frees(size_t *block_array, size_t block_count)
 		return;
 	}
 
-	set_color(COLOR_CYAN, COLOR_DEFAULT, 0);
-
 	for (size_t i = 0; i < block_count; i++)
 	{
 		size_t block = block_array[i];
 		voidptr_array *entries = status.entry_lookup->data[block];
 		memory_entry *entry = entries->data[entries->count - 1];
 
+		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 		printf("|Block #%-5ld: %-6s, has %-5ld entries:                              |\n", block, format_size(entry->size), entries->count);
 
+		set_color(COLOR_CYAN, COLOR_DEFAULT, 0);
 		for (size_t j = 0; j < entries->count; j++)
 		{
 			entry = entries->data[j];
@@ -456,6 +456,7 @@ static void print_missing_frees(size_t *block_array, size_t block_count)
 		}
 	}
 }
+
 static void find_zero_re_allocs(size_t **alloc_array, size_t **realloc_array, size_t *zero_alloc_count, size_t *zero_realloc_count)
 {
 	size_t *allocv = NULL, *reallocv = NULL;
@@ -540,6 +541,7 @@ static void print_zero_allocs(size_t *block_array, size_t zero_alloc_count)
 		voidptr_array *entries = status.entry_lookup->data[block];
 		memory_entry *entry;
 
+		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 		printf("|Block #%-5ld has %-5ld entries:                                       |\n", block, entries->count);
 
 		for (size_t j = 0; j < entries->count; j++)
@@ -576,6 +578,7 @@ static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
 		voidptr_array *entries = status.entry_lookup->data[block];
 		memory_entry *entry;
 
+		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 		printf("|Block #%-5ld has %-5ld entries:                                       |\n", block, entries->count);
 
 		for (size_t j = 0; j < entries->count; j++)
@@ -595,6 +598,10 @@ static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
 	}
 }
 
+static void find_invalid_reallocs_frees(size_t **nval_reallocs_v, size_t **nval_frees_v, size_t *invalid_reallocs, size_t *invalid_frees)
+{
+
+}
 
 
 void report_alloc_checks()
@@ -619,7 +626,8 @@ void report_alloc_checks()
 	//TODO: Find invalid frees (id=0)
 	//TODO: Count entries
 	//TODO: Later print as invalid frees
-	size_t invalid_reallocs = 0, invalid_frees = 0;
+	size_t invalid_reallocs, invalid_frees, *nval_reallocs_v, *nval_frees_v;
+	find_invalid_reallocs_frees(&nval_reallocs_v, &nval_frees_v, &invalid_reallocs, &invalid_frees);
 
 	//TODO: Find failed allocs (id=0)
 	//TODO: Count entries
