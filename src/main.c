@@ -15,6 +15,16 @@ int main()
 	int *tmp4 = CHKD_REALLOC(arr4, 5 * sizeof(int));
 	CHKD_FREE(tmp4);
 
+	int *arr5 = CHKD_MALLOC(sizeof(int) * (1ul << 40));
+
+	(void)arr1;
+	(void)arr2;
+	(void)arr3;
+	(void)tmp3;
+	(void)arr4;
+	(void)tmp4;
+	(void)arr5;
+
 	report_alloc_checks();
 	cleanup_alloc_checks();
 	return 0;

@@ -343,8 +343,9 @@ void *checked_realloc(void *ptr, size_t size, char *file_name, int line)
 	memory_entry *entry = create_memory_entry(ENTRY_REALLOC, id, ptr, new_ptr, size, file_name, line);
 	append_voidptr_array(status.reallocs, entry);
 
-	//update id to pointer matching, if not null or unlisted
-	if (id != 0)
+	//update id to pointer matching, if not NULL or unlisted
+	//if returned NULL, keep pointer to check for future frees
+	if (id != 0 && new_ptr != NULL)
 		status.pointers->data[id] = new_ptr;
 	append_voidptr_array(status.entry_lookup->data[id], entry);
 
@@ -373,9 +374,6 @@ static void find_lost_blocks(size_t **block_array, size_t *block_count, size_t *
 	size_t *blockv = NULL;
 	size_t blockc = 0;
 	size_t size = 0;
-
-	//Perform two passes
-	//One for counting and one for storing ids
 
 	//Skip id=0 (NULL/invalid)
 	for (size_t i = 1; i < status.entry_lookup->count; i++)
@@ -465,11 +463,7 @@ static void find_zero_re_allocs(size_t **alloc_array, size_t **realloc_array, si
 	size_t *allocv = NULL, *reallocv = NULL;
 	size_t allocc = 0, reallocc = 0;
 
-	//Perform two passes
-	//One for counting and one for storing ids
-
-	//Skip NULL, count NULL zero-sized allocs as failed
-	for (size_t i = 1; i < status.entry_lookup->count; i++)
+	for (size_t i = 0; i < status.entry_lookup->count; i++)
 	{
 		voidptr_array *current_block = status.entry_lookup->data[i];
 
@@ -481,15 +475,11 @@ static void find_zero_re_allocs(size_t **alloc_array, size_t **realloc_array, si
 			{
 				allocc++;
 				break;
-				//If alloc returned NULL, has no more entries
-				//Otherwise, they are needed but id will be kept
 			}
 			else if (current_entry->type == ENTRY_REALLOC && current_entry->size == 0)
 			{
 				reallocc++;
 				break;
-				//If realloc returned NULL, has no more entries
-				//Otherwise, they are needed but id will be kept
 			}
 		}
 	}
@@ -499,8 +489,7 @@ static void find_zero_re_allocs(size_t **alloc_array, size_t **realloc_array, si
 	reallocv = malloc(reallocc * sizeof(size_t));
 	DIE_NULL(reallocv);
 
-	//Skip NULL, count NULL zero-sized allocs as failed
-	for (size_t i = 1, ahead = 0, rhead = 0; i < status.entry_lookup->count && (ahead < allocc || rhead < reallocc); i++)
+	for (size_t i = 0, ahead = 0, rhead = 0; i < status.entry_lookup->count && (ahead < allocc || rhead < reallocc); i++)
 	{
 		voidptr_array *current_block = status.entry_lookup->data[i];
 
@@ -601,6 +590,57 @@ static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
 	}
 }
 
+static void find_failed_re_allocs(size_t **failed_reallocs_v, size_t *failed_allocs, size_t *failed_reallocs)
+{
+	//REMINDER: Ignore zero-sized ops that return NULL, shown separately
+
+	size_t *reallocv = NULL;
+	size_t allocc = 0, reallocc = 0;
+
+	voidptr_array *null_block = status.entry_lookup->data[0];
+
+	for (size_t i = 0; i < null_block->count; i++)
+	{
+		memory_entry *entry = null_block->data[i];
+
+		if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size != 0) allocc++;
+	}
+
+	for (size_t i = 1; i < status.entry_lookup->count; i++)
+	{
+		voidptr_array *cur_block = status.entry_lookup->data[i];
+
+		for (size_t j = 0; j < cur_block->count; j++)
+		{
+			memory_entry *entry = cur_block->data[j];
+
+			if (entry->type == ENTRY_REALLOC && entry->size != 0) reallocc++;
+		}
+	}
+
+	reallocv = malloc(reallocc * sizeof(size_t));
+	DIE_NULL(reallocv);
+
+	for (size_t i = 1, head = 0; i < status.entry_lookup->count && head < reallocc; i++)
+	{
+		voidptr_array *cur_block = status.entry_lookup->data[i];
+
+		for (size_t j = 0; j < cur_block->count; j++)
+		{
+			memory_entry *entry = cur_block->data[j];
+
+			if (entry->type == ENTRY_REALLOC && entry->size != 0)
+			{
+				reallocv[head++] = i;
+				break;
+			}
+		}
+	}
+
+	*failed_reallocs_v = reallocv;
+	*failed_allocs = allocc;
+	*failed_reallocs = reallocc;
+}
 
 
 void report_alloc_checks()
@@ -617,16 +657,11 @@ void report_alloc_checks()
 
 	size_t zero_allocs, zero_reallocs, *zero_allocs_v, *zero_reallocs_v;
 	find_zero_re_allocs(&zero_allocs_v, &zero_reallocs_v, &zero_allocs, &zero_reallocs);
-	//TODO: Later print as zero-sized reallocs (use ids to show ops if returned pointer is not NULL)
-
-	//TODO: Find failed allocs (id=0)
-	//TODO: Count entries
+	
+	size_t failed_allocs, failed_reallocs, *failed_reallocs_v;
+	find_failed_re_allocs(&failed_reallocs_v, &failed_allocs, &failed_reallocs);
 	//TODO: Later print as failed allocs
-	//TODO: Find failed reallocs (id=0) (keep ids)
-	//TODO: Count entries
-	//TODO: Later print as failed reallocs (use ids to show alloc and list reallocs)
-	//REMINDER: Ignore zero-sized ops that return NULL, shown separately
-	size_t failed_allocs = 0, failed_reallocs = 0;
+	//TODO: Later print as failed reallocs (use ids to show ops)
 
 	//TODO: Find NULL reallocs
 	//TODO: Find NULL frees
@@ -666,6 +701,7 @@ void report_alloc_checks()
 	free(lost_blocks_v);
 	free(zero_allocs_v);
 	free(zero_reallocs_v);
+	free(failed_reallocs_v);
 }
 
 void cleanup_alloc_checks()
