@@ -363,7 +363,9 @@ void checked_free(void *ptr, char *file_name, int line)
 	append_voidptr_array(status.frees, entry);
 	append_voidptr_array(status.entry_lookup->data[id], entry);
 
-	//TODO: Trim array
+	//In most cases, block won't be touched after free, so we can trim to reduce memory usage
+	//Id is preserved in case the block is referenced again
+	trim_voidptr_array(status.entry_lookup->data[id]);
 }
 #pragma GCC diagnostic pop
 
@@ -641,6 +643,7 @@ static void find_failed_re_allocs(size_t **failed_reallocs_v, size_t *failed_all
 	*failed_allocs = allocc;
 	*failed_reallocs = reallocc;
 }
+
 
 
 void report_alloc_checks()
