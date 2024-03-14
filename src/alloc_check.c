@@ -24,6 +24,34 @@
 
 
 
+enum TERM_COLOR
+{
+	COLOR_DEFAULT = 39,
+	COLOR_BLACK = 30,
+	COLOR_DARK_RED= 31,
+	COLOR_DARK_GREEN = 32,
+	COLOR_DARK_YELLOW = 33,
+	COLOR_DARK_BLUE = 34,
+	COLOR_DARK_MAGENTA = 35,
+	COLOR_DARK_CYAN = 36,
+	COLOR_LIGHT_GRAY = 37,
+	COLOR_DARK_GRAY = 90,
+	COLOR_RED = 91,
+	COLOR_GREEN = 92,
+	COLOR_ORANGE = 93,
+	COLOR_BLUE = 94,
+	COLOR_MAGENTA = 95,
+	COLOR_CYAN = 96,
+	COLOR_WHITE = 97,
+};
+
+static void set_color(int fg, int bg, char bold)
+{
+	printf("\033[%d;%dm\033[%dm", bold, fg, bg + 10);
+}
+
+
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 static char __format_size_buff[6+1];
@@ -406,9 +434,12 @@ static void print_missing_frees(size_t *block_array, size_t block_count)
 {
 	if (block_count == 0)
 	{
+		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
 		printf("| No missing frees.                                                    |\n");
 		return;
 	}
+
+	set_color(COLOR_CYAN, COLOR_DEFAULT, 0);
 
 	for (size_t i = 0; i < block_count; i++)
 	{
@@ -495,9 +526,13 @@ static void print_zero_allocs(size_t *block_array, size_t zero_alloc_count)
 {
 	if (zero_alloc_count == 0)
 	{
+		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
 		printf("| No zero-sized allocs.                                                |\n");
 		return;
 	}
+
+	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
+	printf("| ===Zero-sized allocs===                                              |\n");
 
 	for (size_t i = 0; i < zero_alloc_count; i++)
 	{
@@ -510,11 +545,54 @@ static void print_zero_allocs(size_t *block_array, size_t zero_alloc_count)
 		for (size_t j = 0; j < entries->count; j++)
 		{
 			entry = entries->data[j];
-			printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+			if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size == 0)
+			{
+				set_color(COLOR_RED, COLOR_DEFAULT, 0);
+				printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+			}
+			else
+			{
+				set_color(COLOR_CYAN, COLOR_DEFAULT, 0);
+				printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+			}
 		}
 	}
+}
+static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
+{
+	if (zero_realloc_count == 0)
+	{
+		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
+		printf("| No zero-sized reallocs.                                              |\n");
+		return;
+	}
 
-	//TODO: Later print as zero-sized allocs (use ids to show ops if returned pointer is not NULL)
+	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
+	printf("| ===Zero-sized reallocs===                                            |\n");
+
+	for (size_t i = 0; i < zero_realloc_count; i++)
+	{
+		size_t block = block_array[i];
+		voidptr_array *entries = status.entry_lookup->data[block];
+		memory_entry *entry;
+
+		printf("|Block #%-5ld has %-5ld entries:                                       |\n", block, entries->count);
+
+		for (size_t j = 0; j < entries->count; j++)
+		{
+			entry = entries->data[j];
+			if (entry->type == ENTRY_REALLOC && entry->size == 0)
+			{
+				set_color(COLOR_RED, COLOR_DEFAULT, 0);
+				printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+			}
+			else
+			{
+				set_color(COLOR_CYAN, COLOR_DEFAULT, 0);
+				printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+			}
+		}
+	}
 }
 
 
@@ -553,52 +631,39 @@ void report_alloc_checks()
 	//REMINDER: Note NULL frees are technically valid
 	size_t failed_allocs = 0, failed_reallocs = 0;
 
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	//Internally 780 cols wide (72 external)
 	printf("\n\n");
 	printf("+=========================alloc_check report===========================+\n");
 	printf("+--Statistics----------------------------------------------------------+\n");
+	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("|Total allocs/reallocs/frees: %-5ld/%-5ld/%-5ld                        |\n", allocs, reallocs, frees);
 	printf("|Total blocks/memory lost: %-5ld/~%-6s                               |\n", blocks_lost, format_size(memory_lost));
 	printf("|Total zero-sized allocs/reallocs: %-5ld/%-5ld                         |\n", zero_allocs, zero_reallocs);
 	printf("|Total invalid reallocs/frees: %-5ld/%-5ld                             |\n", invalid_reallocs, invalid_frees);
 	printf("|Total failed allocs/reallocs: %-5ld/%-5ld                             |\n", failed_allocs, failed_reallocs);
-	//printf("|===Note===: Failed (re)allocs may not be your fault. If unchecked,    |\n");
-	//printf("|            will cause trouble.                                       |\n");
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Missing frees-------------------------------------------------------+\n");
 	print_missing_frees(lost_blocks_v, blocks_lost);
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Invalid operations--------------------------------------------------+\n");
 	print_zero_allocs(zero_allocs_v, zero_allocs);
+	print_zero_reallocs(zero_reallocs_v, zero_reallocs);
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
 	//TODO: List invalid reallocs
 	//TODO: List invalid frees
-	//printf("|===Note===: Failed frees might be caused by freeing the same memory   |\n");
-	//printf("|            more than once.                                           |\n");
-	//printf("|===Note===: Failed reallocs might occur if the returned pointers are  |\n");
-	//printf("|            not kept (not updating pointers).                         |\n");
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Failed (re)allocations----------------------------------------------+\n");
 	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
 	//TODO: List failed allocs
 	//TODO: List failed reallocs
 	//TODO: Note failed reallocs can be shown in invalid if zero-sized
-	//printf("|===Note===: Failed (re)allocs may not be your fault. If unchecked,    |\n");
-	//printf("|            will cause trouble.                                       |\n");
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+======================================================================+\n");
+	set_color(COLOR_DEFAULT, COLOR_DEFAULT, 0);
 
 	free(lost_blocks_v);
 	free(zero_allocs_v);
 	free(zero_reallocs_v);
-
-	//TODO: Make notes only appear if related section is not empty
 }
-
-
-
-
-
-
-//Allocs create new id
-//Reallocs searches and updates pointer to id
-//Frees searches id
-//NULL id must always exist
-
-//Report will iterate every id [through entry_lookup], determine final state,
