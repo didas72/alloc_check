@@ -146,9 +146,10 @@ static void append_voidptr_array(voidptr_array *arr, void *data)
 enum ENTRY_TYPE
 {
 	ENTRY_NVAL = 0,
-	ENTRY_ALLOC = 1,
-	ENTRY_REALLOC = 2,
-	ENTRY_FREE = 3,
+	ENTRY_MALLOC = 1,
+	ENTRY_CALLOC = 2,
+	ENTRY_REALLOC = 3,
+	ENTRY_FREE = 4,
 };
 
 typedef struct
@@ -166,7 +167,7 @@ typedef struct
 {
 	size_t id_counter;
 
-	//Each alloc, realloc and free entries
+	//Each [m/c]alloc, realloc and free entries
 	voidptr_array *allocs;
 	voidptr_array *reallocs;
 	voidptr_array *frees;
@@ -239,8 +240,9 @@ void destroy_memory_entry(memory_entry *entry)
 char *entry_type_str(int type)
 {
 	if (type == 1) return "MALLOC";
-	if (type == 2) return "REALLOC";
-	if (type == 3) return "FREE";
+	if (type == 2) return "CALLOC";
+	if (type == 3) return "REALLOC";
+	if (type == 4) return "FREE";
 	return "";
 }
 
@@ -257,15 +259,42 @@ void *checked_malloc(size_t size, char *file_name, int line)
 	memory_entry *entry;
 	size_t id;
 
-	if (!ptr)
+	if (ptr == NULL)
 	{
 		id = 0;
-		entry = create_memory_entry(ENTRY_ALLOC, id, ptr, size, file_name, line);
+		entry = create_memory_entry(ENTRY_MALLOC, id, ptr, size, file_name, line);
 	}
 	else
 	{
 		id = status.id_counter++;
-		entry = create_memory_entry(ENTRY_ALLOC, id, ptr, size, file_name, line);
+		entry = create_memory_entry(ENTRY_MALLOC, id, ptr, size, file_name, line);
+		append_voidptr_array(status.pointers, ptr); //add index to pointer matching
+		append_voidptr_array(status.entry_lookup, create_voidptr_array()); //create lookup for new id
+	}
+	append_voidptr_array(status.allocs, entry); //add to alloc list
+	append_voidptr_array(status.entry_lookup->data[id], entry); //add first entry
+
+	return ptr;
+}
+
+void *checked_calloc(size_t nitems, size_t size, char *file_name, int line)
+{
+	init_checker();
+
+	void *ptr = malloc(size);
+
+	memory_entry *entry;
+	size_t id;
+
+	if (ptr == NULL)
+	{
+		id = 0;
+		entry = create_memory_entry(ENTRY_CALLOC, id, ptr, size, file_name, line);
+	}
+	else
+	{
+		id = status.id_counter++;
+		entry = create_memory_entry(ENTRY_CALLOC, id, ptr, nitems * size, file_name, line);
 		append_voidptr_array(status.pointers, ptr); //add index to pointer matching
 		append_voidptr_array(status.entry_lookup, create_voidptr_array()); //create lookup for new id
 	}
@@ -308,7 +337,6 @@ void checked_free(void *ptr, char *file_name, int line)
 
 
 
-
 static void find_lost_blocks(size_t **block_array, size_t *block_count, size_t *total_size)
 {
 	size_t *blockv = NULL;
@@ -348,7 +376,7 @@ static void find_lost_blocks(size_t **block_array, size_t *block_count, size_t *
 	DIE_NULL(blockv);
 
 	//Skip id=0 (NULL/invalid)
-	for (size_t i = 1, head = 0; i < status.entry_lookup->count; i++)
+	for (size_t i = 1, head = 0; i < status.entry_lookup->count && head < blockc; i++)
 	{
 		char freed = 0;
 		voidptr_array *current_block = status.entry_lookup->data[i];
@@ -378,26 +406,115 @@ static void print_missing_frees(size_t *block_array, size_t block_count)
 {
 	if (block_count == 0)
 	{
-		printf("| No missing frees.                                |\n");
+		printf("| No missing frees.                                                    |\n");
 		return;
 	}
 
-	//TODO: Later print as missing frees (use ids to list reallocs)
-	//Skip NULL (id=0)
 	for (size_t i = 0; i < block_count; i++)
 	{
 		size_t block = block_array[i];
 		voidptr_array *entries = status.entry_lookup->data[block];
 		memory_entry *entry = entries->data[entries->count - 1];
 
-		printf("|Block #%-5ld: %-6s, has %-5ld entries:          |\n", i, format_size(entry->size), entries->count);
+		printf("|Block #%-5ld: %-6s, has %-5ld entries:                              |\n", block, format_size(entry->size), entries->count);
 
 		for (size_t j = 0; j < entries->count; j++)
 		{
 			entry = entries->data[j];
-			printf("| -> %-7s, %-6s at %-25s  |\n", entry_type_str(entry->type), format_size(entry->size), format_file_line(entry->file_name, entry->line));
+			printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
 		}
 	}
+}
+static void find_zero_re_allocs(size_t **alloc_array, size_t **realloc_array, size_t *zero_alloc_count, size_t *zero_realloc_count)
+{
+	size_t *allocv = NULL, *reallocv = NULL;
+	size_t allocc = 0, reallocc = 0;
+
+	//Perform two passes
+	//One for counting and one for storing ids
+
+	//Skip NULL, count NULL zero-sized allocs as failed
+	for (size_t i = 1; i < status.entry_lookup->count; i++)
+	{
+		voidptr_array *current_block = status.entry_lookup->data[i];
+
+		for (size_t j = 0; j < current_block->count; j++)
+		{
+			memory_entry *current_entry = current_block->data[j];
+
+			if ((current_entry->type == ENTRY_MALLOC || current_entry->type == ENTRY_CALLOC) && current_entry->size == 0)
+			{
+				allocc++;
+				break;
+				//If alloc returned NULL, has no more entries
+				//Otherwise, they are needed but id will be kept
+			}
+			else if (current_entry->type == ENTRY_REALLOC && current_entry->size == 0)
+			{
+				reallocc++;
+				break;
+				//If realloc returned NULL, has no more entries
+				//Otherwise, they are needed but id will be kept
+			}
+		}
+	}
+
+	allocv = malloc(allocc * sizeof(size_t));
+	DIE_NULL(allocv);
+	reallocv = malloc(reallocc * sizeof(size_t));
+	DIE_NULL(reallocv);
+
+	//Skip NULL, count NULL zero-sized allocs as failed
+	for (size_t i = 1, ahead = 0, rhead = 0; i < status.entry_lookup->count && (ahead < allocc || rhead < reallocc); i++)
+	{
+		voidptr_array *current_block = status.entry_lookup->data[i];
+
+		for (size_t j = 0; j < current_block->count; j++)
+		{
+			memory_entry *current_entry = current_block->data[j];
+
+			if ((current_entry->type == ENTRY_MALLOC || current_entry->type == ENTRY_CALLOC) && current_entry->size == 0)
+			{
+				allocv[ahead++] = i;
+				break;
+			}
+			else if (current_entry->type == ENTRY_REALLOC && current_entry->size == 0)
+			{
+				reallocv[rhead++] = i;
+				break;
+			}
+		}
+	}
+
+	*alloc_array = allocv;
+	*realloc_array = reallocv;
+	*zero_alloc_count = allocc;
+	*zero_realloc_count = reallocc;
+}
+static void print_zero_allocs(size_t *block_array, size_t zero_alloc_count)
+{
+	if (zero_alloc_count == 0)
+	{
+		printf("| No zero-sized allocs.                                                |\n");
+		return;
+	}
+
+	for (size_t i = 0; i < zero_alloc_count; i++)
+	{
+		size_t block = block_array[i];
+		voidptr_array *entries = status.entry_lookup->data[block];
+		memory_entry *entry;
+
+		printf("|Block #%-5ld has %-5ld entries:                                       |\n", block, entries->count);
+
+		for (size_t j = 0; j < entries->count; j++)
+		{
+			entry = entries->data[j];
+			printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->ptr, format_file_line(entry->file_name, entry->line));
+		}
+	}
+
+	//TODO: Later print as zero-sized allocs (use ids to show ops if returned pointer is not NULL)
 }
 
 
@@ -414,13 +531,9 @@ void report_alloc_checks()
 	size_t blocks_lost, memory_lost, *lost_blocks_v;
 	find_lost_blocks(&lost_blocks_v, &blocks_lost, &memory_lost);
 
-	//TODO: Find zero-sized allocs
-	//TODO: Count entries
-	//TODO: Later print as zero-sized allocs
-	//TODO: Find zero-sized reallocs (keep ids)
-	//TODO: Count entries
-	//TODO: Later print as zero-sized reallocs (use ids to show alloc and list reallocs)
-	size_t zero_allocs = 0, zero_reallocs = 0;
+	size_t zero_allocs, zero_reallocs, *zero_allocs_v, *zero_reallocs_v;
+	find_zero_re_allocs(&zero_allocs_v, &zero_reallocs_v, &zero_allocs, &zero_reallocs);
+	//TODO: Later print as zero-sized reallocs (use ids to show ops if returned pointer is not NULL)
 
 	//TODO: Find invalid reallocs (id=0)
 	//TODO: Count entries
@@ -436,40 +549,44 @@ void report_alloc_checks()
 	//TODO: Find failed reallocs (id=0) (keep ids)
 	//TODO: Count entries
 	//TODO: Later print as failed reallocs (use ids to show alloc and list reallocs)
+	//REMINDER: Ignore zero-sized ops that return NULL, shown separately
+	//REMINDER: Note NULL frees are technically valid
 	size_t failed_allocs = 0, failed_reallocs = 0;
 
-	//Internally 60 cols wide (62 external)
-	//Minimum height is 17 rows (+2 empty)
+	//Internally 780 cols wide (72 external)
 	printf("\n\n");
-	printf("+================alloc_check report================+\n");
-	printf("+--Statistics--------------------------------------+\n");
-	printf("|Total allocs/reallocs/frees: %05ld/%05ld/%05ld    |\n", allocs, reallocs, frees);
-	printf("|Blocks lost: %05ld                                |\n", blocks_lost);
-	printf("|Total memory lost: ~%-6s                        |\n", format_size(memory_lost)); //TODO: Variable unit (B, kB, MB)
-	printf("|Total zero-sized allocs/reallocs: %05ld/%05ld     |\n", zero_allocs, zero_reallocs);
-	printf("|Total invalid reallocs/frees: %05ld/%05ld         |\n", invalid_reallocs, invalid_frees);
-	printf("|Total failed allocs/reallocs: %05ld/%05ld         |\n", failed_allocs, failed_reallocs);
-	printf("|Note: Failed (re)allocs may not be your fault. If |\n");
-	printf("|      unchecked, will cause trouble.              |\n");
-	printf("+--Missing frees-----------------------------------+\n");
+	printf("+=========================alloc_check report===========================+\n");
+	printf("+--Statistics----------------------------------------------------------+\n");
+	printf("|Total allocs/reallocs/frees: %-5ld/%-5ld/%-5ld                        |\n", allocs, reallocs, frees);
+	printf("|Total blocks/memory lost: %-5ld/~%-6s                               |\n", blocks_lost, format_size(memory_lost));
+	printf("|Total zero-sized allocs/reallocs: %-5ld/%-5ld                         |\n", zero_allocs, zero_reallocs);
+	printf("|Total invalid reallocs/frees: %-5ld/%-5ld                             |\n", invalid_reallocs, invalid_frees);
+	printf("|Total failed allocs/reallocs: %-5ld/%-5ld                             |\n", failed_allocs, failed_reallocs);
+	//printf("|===Note===: Failed (re)allocs may not be your fault. If unchecked,    |\n");
+	//printf("|            will cause trouble.                                       |\n");
+	printf("+--Missing frees-------------------------------------------------------+\n");
 	print_missing_frees(lost_blocks_v, blocks_lost);
-	printf("+--Invalid operations------------------------------+\n");
-	printf("|              ===NOT  IMPLEMENTED===              |\n");
-	//TODO: List zero-sized allocs
-	//TODO: List zero-sized reallocs
+	printf("+--Invalid operations--------------------------------------------------+\n");
+	print_zero_allocs(zero_allocs_v, zero_allocs);
+	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
 	//TODO: List invalid reallocs
 	//TODO: List invalid frees
-	printf("|Note: Failed frees might be caused by freeing the |\n");
-	printf("|      same memory more than once.                 |\n");
-	printf("|Note: Failed reallocs might occur if the returned |\n");
-	printf("|      pointers are not kept (not updating ptrs).  |\n");
-	printf("+--Failed (re)allocations--------------------------+\n");
-	printf("|              ===NOT  IMPLEMENTED===              |\n");
+	//printf("|===Note===: Failed frees might be caused by freeing the same memory   |\n");
+	//printf("|            more than once.                                           |\n");
+	//printf("|===Note===: Failed reallocs might occur if the returned pointers are  |\n");
+	//printf("|            not kept (not updating pointers).                         |\n");
+	printf("+--Failed (re)allocations----------------------------------------------+\n");
+	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
 	//TODO: List failed allocs
 	//TODO: List failed reallocs
-	printf("|Note: Failed (re)allocs may not be your fault. If |\n");
-	printf("|      unchecked, will cause trouble.              |\n");
-	printf("+==================================================+\n");
+	//TODO: Note failed reallocs can be shown in invalid if zero-sized
+	//printf("|===Note===: Failed (re)allocs may not be your fault. If unchecked,    |\n");
+	//printf("|            will cause trouble.                                       |\n");
+	printf("+======================================================================+\n");
+
+	free(lost_blocks_v);
+	free(zero_allocs_v);
+	free(zero_reallocs_v);
 
 	//TODO: Make notes only appear if related section is not empty
 }

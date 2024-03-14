@@ -19,24 +19,27 @@
 #include <stddef.h>
 
 
-#ifndef USE_STANDARD_MEM
+#ifdef USE_STANDARD_MEM
 #define CHKD_MALLOC(size) malloc(size)
+#define CHKD_CALLOC(nitems, size) calloc(nitems, size)
 #define CHKD_REALLOC(ptr, size) malloc(ptr, size)
 #define CHKD_FREE(ptr) free(ptr);
 #else
 #define CHKD_MALLOC(size) checked_malloc(size, __FILE__, __LINE__)
-#define CHKD_REALLOC(ptr, size) checked_malloc(ptr, size, __FILE__, __LINE__)
+#define CHKD_CALLOC(nitems, size) checked_calloc(nitems, size, __FILE__, __LINE__)
+#define CHKD_REALLOC(ptr, size) checked_realloc(ptr, size, __FILE__, __LINE__)
 #define CHKD_FREE(ptr) checked_free(ptr, __FILE__, __LINE__);
 #endif
 
 
 #ifndef ALLOW_STANDARD_MEM
 //Poison identifiers to prevent their use
-#pragma GCC poison malloc realloc free
+#pragma GCC poison malloc calloc realloc free
 #endif
 
 
 void *checked_malloc(size_t size, char *file_name, int line);
+void *checked_calloc(size_t nitems, size_t size, char *file_name, int line);
 void *checked_realloc(void *ptr, size_t size, char *file_name, int line);
 void checked_free(void *ptr, char *file_name, int line);
 
