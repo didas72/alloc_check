@@ -451,11 +451,11 @@ static void print_missing_frees(size_t *block_array, size_t block_count)
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 		printf("|Block #%-5ld: %-6s, has %-5ld entries:                              |\n", block, format_size(entry->size), entries->count);
 
-		set_color(COLOR_CYAN, COLOR_DEFAULT, 0);
+		set_color(COLOR_RED, COLOR_DEFAULT, 0);
 		for (size_t j = 0; j < entries->count; j++)
 		{
 			entry = entries->data[j];
-			printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
+			printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
 		}
 	}
 }
@@ -586,7 +586,7 @@ static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
 			else
 			{
 				set_color(COLOR_CYAN, COLOR_DEFAULT, 0);
-				printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->old_ptr, format_file_line(entry->file_name, entry->line));
+				printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
 			}
 		}
 	}
@@ -616,7 +616,7 @@ static void find_failed_re_allocs(size_t **failed_reallocs_v, size_t *failed_all
 		{
 			memory_entry *entry = cur_block->data[j];
 
-			if (entry->type == ENTRY_REALLOC && entry->size != 0) reallocc++;
+			if (entry->type == ENTRY_REALLOC && entry->size != 0 && entry->new_ptr == NULL) reallocc++;
 		}
 	}
 
@@ -631,7 +631,7 @@ static void find_failed_re_allocs(size_t **failed_reallocs_v, size_t *failed_all
 		{
 			memory_entry *entry = cur_block->data[j];
 
-			if (entry->type == ENTRY_REALLOC && entry->size != 0)
+			if (entry->type == ENTRY_REALLOC && entry->size != 0 && entry->new_ptr == NULL)
 			{
 				reallocv[head++] = i;
 				break;
@@ -642,6 +642,66 @@ static void find_failed_re_allocs(size_t **failed_reallocs_v, size_t *failed_all
 	*failed_reallocs_v = reallocv;
 	*failed_allocs = allocc;
 	*failed_reallocs = reallocc;
+}
+static void print_failed_allocs(size_t failed_allocs)
+{
+	if (failed_allocs == 0)
+	{
+		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
+		printf("| No failed allocs.                                                    |\n");
+		return;
+	}
+
+	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
+	printf("| ===Failed allocs===                                                  |\n");
+
+	voidptr_array *null_block = status.entry_lookup->data[0];
+
+	set_color(COLOR_RED, COLOR_DEFAULT, 0);
+	for (size_t i = 0; i < null_block->count; i++)
+	{
+		memory_entry *entry = null_block->data[i];
+
+		if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size != 0)
+			printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
+	}
+}
+static void print_failed_reallocs(size_t *block_array, size_t failed_reallocs)
+{
+	if (failed_reallocs == 0)
+	{
+		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
+		printf("| No failed reallocs.                                                  |\n");
+		return;
+	}
+
+	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
+	printf("| ===Failed reallocs===                                                |\n");
+
+	for (size_t i = 0; i < failed_reallocs; i++)
+	{
+		size_t block = block_array[i];
+		voidptr_array *entries = status.entry_lookup->data[block];
+		memory_entry *entry;
+
+		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
+		printf("|Block #%-5ld has %-5ld entries:                                       |\n", block, entries->count);
+
+		for (size_t j = 0; j < entries->count; j++)
+		{
+			entry = entries->data[j];
+			if (entry->type == ENTRY_REALLOC && entry->size != 0 && entry->new_ptr == NULL)
+			{
+				set_color(COLOR_RED, COLOR_DEFAULT, 0);
+				printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->old_ptr, format_file_line(entry->file_name, entry->line));
+			}
+			else
+			{
+				set_color(COLOR_CYAN, COLOR_DEFAULT, 0);
+				printf("| -> %-7s %6s @%-18p at %-25s   |\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
+			}
+		}
+	}
 }
 
 
@@ -690,9 +750,8 @@ void report_alloc_checks()
 	print_zero_reallocs(zero_reallocs_v, zero_reallocs);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Failed (re)allocations----------------------------------------------+\n");
-	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
-	//TODO: List failed allocs
-	//TODO: List failed reallocs
+	print_failed_allocs(failed_allocs);
+	print_failed_reallocs(failed_reallocs_v, failed_reallocs);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Possible mistakes---------------------------------------------------+\n");
 	printf("|                        ===NOT  IMPLEMENTED===                        |\n");
