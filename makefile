@@ -1,19 +1,21 @@
+AR=ar
+AR_FLAGS=rcs
 CC=gcc
-C_FLAGS=-O3 -Wall -Wextra -Wno-unused-result -g
-VAL_FLAGS=--leak-check=full --track-origins=yes -s
+C_FLAGS=-O2 -Wall -Wextra -Wno-unused-result
 
-SRC=src
-TEST=tests
-OBJ=build/obj
-BIN=build/bin
+DIR_SRC=src
+DIR_INC=include
+DIR_BUILD=build
 
-OUTBIN=$(BIN)/main
+OUTBIN=$(DIR_BUILD)/bin/alloc_check.a
 
-SRCS=$(wildcard $(SRC)/*.c)
-OBJS=$(patsubst $(SRC)/%.c, $(OBJ)/%.o, $(SRCS))
+SRCS=$(wildcard $(DIR_SRC)/*.c)
+OBJS=$(patsubst $(DIR_SRC)/%.c, $(DIR_BUILD)/obj/%.o, $(SRCS))
 
 
-.PHONY: all run build debug memleak clean loc
+
+.PHONY: all build clean loc
+
 
 
 all: build
@@ -21,29 +23,18 @@ build: $(OUTBIN)
 
 
 
-run: $(OUTBIN)
-	$(OUTBIN)
-
-
 $(OUTBIN): $(OBJS)
 	@mkdir -p $(@D)
-	$(CC) $(C_FLAGS) $(OBJS) -o $@
+	$(AR) $(AR_FLAGS) $@
 
-$(OBJ)/%.o: $(SRC)/%.c
+$(DIR_BUILD)/obj/%.o: $(DIR_SRC)/%.c
 	@mkdir -p $(@D)
-	$(CC) $(C_FLAGS) -c $< -o $@
+	$(CC) $(C_FLAGS) -I$(DIR_INC) -c $< -o $@
 
-
-
-debug: $(OUTBIN)
-	gdb ./$(OUTBIN)
-
-memleak: $(OUTBIN)
-	valgrind $(VAL_FLAGS) $(OUTBIN)
 
 
 clean:
-	$(RM) -r $(OBJ) $(BIN)
+	$(RM) -r $(DIR_OBJ) $(DIR_BUILD)
 
 loc:
-	scc -s lines --no-cocomo --no-gitignore -w --size-unit binary --exclude-ext md,makefile,json --exclude-dir tests/framework
+	scc -s lines --no-cocomo --no-gitignore -w --size-unit binary --exclude-ext md,makefiles
