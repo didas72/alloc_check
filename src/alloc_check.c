@@ -165,7 +165,7 @@ static void trim_voidptr_array(voidptr_array *arr)
 
 static void append_voidptr_array(voidptr_array *arr, void *data)
 {
-	ensure_voidptr_array(arr, arr->capacity + 1);
+	ensure_voidptr_array(arr, arr->count + 1);
 	arr->data[arr->count++] = data;
 }
 
