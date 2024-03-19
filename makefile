@@ -25,7 +25,7 @@ build: $(OUTBIN)
 
 $(OUTBIN): $(OBJS)
 	@mkdir -p $(@D)
-	$(AR) $(AR_FLAGS) $@
+	$(AR) $(AR_FLAGS) $@ $^
 
 $(DIR_BUILD)/obj/%.o: $(DIR_SRC)/%.c
 	@mkdir -p $(@D)
