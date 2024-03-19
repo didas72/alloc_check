@@ -7,7 +7,7 @@ DIR_SRC=src
 DIR_INC=include
 DIR_BUILD=build
 
-OUTBIN=$(DIR_BUILD)/bin/alloc_check.a
+OUTBIN=$(DIR_BUILD)/bin/liballoc_check.a
 
 SRCS=$(wildcard $(DIR_SRC)/*.c)
 OBJS=$(patsubst $(DIR_SRC)/%.c, $(DIR_BUILD)/obj/%.o, $(SRCS))
