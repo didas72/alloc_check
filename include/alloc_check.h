@@ -28,7 +28,7 @@
 #define CHKD_MALLOC(size) checked_malloc(size, __FILE__, __LINE__)
 #define CHKD_CALLOC(nitems, size) checked_calloc(nitems, size, __FILE__, __LINE__)
 #define CHKD_REALLOC(ptr, size) checked_realloc(ptr, size, __FILE__, __LINE__)
-#define CHKD_FREE(ptr) checked_free(ptr, __FILE__, __LINE__);
+#define CHKD_FREE(ptr) checked_free(ptr, __FILE__, __LINE__)
 #endif
 
 
@@ -45,7 +45,6 @@ void checked_free(void *ptr, char *file_name, int line);
 
 void report_alloc_checks();
 void cleanup_alloc_checks();
-//TODO: Full history function
 
 
 #endif
