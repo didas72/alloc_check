@@ -20,9 +20,10 @@
 
 
 #ifdef USE_STANDARD_MEM
+#include <stdlib.h>
 #define CHKD_MALLOC(size) malloc(size)
 #define CHKD_CALLOC(nitems, size) calloc(nitems, size)
-#define CHKD_REALLOC(ptr, size) malloc(ptr, size)
+#define CHKD_REALLOC(ptr, size) realloc(ptr, size)
 #define CHKD_FREE(ptr) free(ptr);
 #else
 #define CHKD_MALLOC(size) checked_malloc(size, __FILE__, __LINE__)
