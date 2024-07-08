@@ -51,9 +51,6 @@ static void set_color(int fg, int bg, char bold)
 }
 
 
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-truncation"
 static char __format_size_buff[6+1];
 static char *format_size(size_t size)
 {
@@ -91,7 +88,7 @@ static char *format_size(size_t size)
 		return __format_size_buff;
 	}
 
-	snprintf(__format_size_buff, 7, "%ld%s", shown_size, unit);
+	snprintf(__format_size_buff, 7, "%ld%2s", shown_size % 10000, unit);
 	return __format_size_buff;
 }
 static char __format_file_line_buff[25+1];
@@ -106,7 +103,6 @@ static char *format_file_line(char *file_name, int line)
 
 	return __format_file_line_buff;
 }
-#pragma GCC diagnostic pop
 
 
 //===Required structures===
