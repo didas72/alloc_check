@@ -226,7 +226,7 @@ static void init_checker()
 
 static size_t find_id(void *ptr)
 {
-	for (size_t i = 0; i < status.pointers->count; i++)
+	for (size_t i = status.pointers->count - 1; i > 0; i--)
 	{
 		if (status.pointers->data[i] == ptr)
 			return i;
@@ -764,6 +764,74 @@ static void print_null_frees(size_t null_frees)
 	}
 }
 
+static void print_all_allocs()
+{
+	if (status.allocs->count == 0)
+	{
+		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
+		printf("| No (c)allocs.                                                        |\n");
+		return;
+	}
+
+	for (size_t i = 0; i < status.allocs->count; i++)
+	{
+		memory_entry *entry = status.allocs->data[i];
+
+		if (entry->new_ptr == NULL) 
+			set_color(COLOR_RED, COLOR_DEFAULT, 0);
+		else if (entry->size == 0)
+			set_color(COLOR_DARK_YELLOW, COLOR_DEFAULT, 0);
+		else
+			set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
+
+		printf("| %4ld %-7s %6s @%-18p at %-25s |\n", i, entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
+	}
+}
+static void print_all_reallocs()
+{
+	if (status.reallocs->count == 0)
+	{
+		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
+		printf("| No reallocs.                                                         |\n");
+		return;
+	}
+	
+	for (size_t i = 0; i < status.reallocs->count; i++)
+	{
+		memory_entry *entry = status.reallocs->data[i];
+
+		if (entry->old_ptr == NULL) 
+			set_color(COLOR_RED, COLOR_DEFAULT, 0);
+		else if (entry->size == 0 || entry->new_ptr == NULL)
+			set_color(COLOR_DARK_YELLOW, COLOR_DEFAULT, 0);
+		else
+			set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
+
+		printf("| %4ld %-7s %6s @%-18p at %-25s |\n", i, entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
+	}
+}
+static void print_all_frees()
+{
+	if (status.frees->count == 0)
+	{
+		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
+		printf("| No frees.                                                           |\n");
+		return;
+	}
+
+	for (size_t i = 0; i < status.frees->count; i++)
+	{
+		memory_entry *entry = status.frees->data[i];
+
+		if (entry->old_ptr == NULL) 
+			set_color(COLOR_RED, COLOR_DEFAULT, 0);
+		else
+			set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
+
+		printf("| %4ld %-7s @%-18p at %-25s        |\n", i, entry_type_str(entry->type), entry->old_ptr, format_file_line(entry->file_name, entry->line));
+	}
+}
+
 
 
 void report_alloc_checks()
@@ -790,7 +858,7 @@ void report_alloc_checks()
 	//Internally 70 cols wide (72 external)
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("\n\n");
-	printf("+=========================alloc_check report===========================+\n");
+	printf("+==========================alloc_check report==========================+\n");
 	printf("+--Statistics----------------------------------------------------------+\n");
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("|Total allocs/reallocs/frees: %-5ld/%-5ld/%-5ld                        |\n", allocs, reallocs, frees);
@@ -821,6 +889,27 @@ void report_alloc_checks()
 	free(zero_allocs_v);
 	free(zero_reallocs_v);
 	free(failed_reallocs_v);
+}
+
+void list_all_entries()
+{
+	init_checker();
+
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
+	printf("\n\n");
+	printf("+========================alloc_check entry list========================+\n");
+	printf("+--[C]Allocs-----------------------------------------------------------+\n");
+	print_all_allocs();
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
+	printf("+--Reallocs------------------------------------------------------------+\n");
+	print_all_reallocs();
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
+	printf("+--Frees---------------------------------------------------------------+\n");
+	print_all_frees();
+	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
+	printf("+======================================================================+\n");
+	set_color(COLOR_DEFAULT, COLOR_DEFAULT, 0);
+	
 }
 
 void cleanup_alloc_checks()

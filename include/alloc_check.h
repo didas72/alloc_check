@@ -45,6 +45,7 @@ void *checked_realloc(void *ptr, size_t size, char *file_name, int line);
 void checked_free(void *ptr, char *file_name, int line);
 
 void report_alloc_checks();
+void list_all_entries();
 void cleanup_alloc_checks();
 
 
