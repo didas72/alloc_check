@@ -17,6 +17,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sus/sus.h"
+#include "sus/vector.h"
+#include "sus/hashtable.h"
+#include "sus/hashes.h"
+
 
 
 #define DIE do { fprintf(stderr, "alloc_check encountered a fatal error.\n"); exit(72); } while (0)
@@ -105,67 +110,6 @@ static char *format_file_line(char *file_name, int line)
 }
 
 
-//===Required structures===
-//Implements needed data structures
-#define VOIDPTRARR_DEFAULT_CAP 4
-
-typedef struct
-{
-	void **data;
-	size_t capacity;
-	size_t count;
-} voidptr_array;
-
-static voidptr_array *create_voidptr_array()
-{
-	voidptr_array *ret = malloc(sizeof(voidptr_array));
-	DIE_NULL(ret);
-
-	ret->data = malloc(VOIDPTRARR_DEFAULT_CAP * sizeof(void *));
-	DIE_NULL(ret->data);
-	ret->count = 0;
-	ret->capacity = VOIDPTRARR_DEFAULT_CAP;
-
-	return ret;
-}
-
-static void destroy_voidptr_array(voidptr_array *arr)
-{
-	free(arr->data);
-	free(arr);
-}
-
-static void ensure_voidptr_array(voidptr_array *arr, size_t capacity)
-{
-	if (arr->capacity >= capacity) return;
-
-	if (arr->capacity < VOIDPTRARR_DEFAULT_CAP) arr->capacity = VOIDPTRARR_DEFAULT_CAP;
-	while (arr->capacity < capacity) arr->capacity <<= 1;
-
-	void **tmp = realloc(arr->data, arr->capacity * sizeof(void *));
-	DIE_NULL(tmp);
-
-	arr->data = tmp;
-}
-
-static void trim_voidptr_array(voidptr_array *arr)
-{
-	if (arr->count == arr->capacity) return;
-
-	void **tmp = realloc(arr->data, arr->count * sizeof(void *));
-	DIE_NULL(tmp);
-
-	arr->data = tmp;
-	arr->capacity = arr->count;
-}
-
-static void append_voidptr_array(voidptr_array *arr, void *data)
-{
-	ensure_voidptr_array(arr, arr->count + 1);
-	arr->data[arr->count++] = data;
-}
-
-
 
 enum ENTRY_TYPE
 {
@@ -176,35 +120,37 @@ enum ENTRY_TYPE
 	ENTRY_FREE = 4,
 };
 
-typedef struct
+typedef struct memory_entry
 {
-	size_t id;
 	int type;
 
 	void *old_ptr, *new_ptr;
 	size_t size;
+	size_t tick;
 	char *file_name;
 	int line;
 } memory_entry;
 
-typedef struct
+typedef struct checker_status
 {
-	size_t id_counter;
-
 	//Each [m/c]alloc, realloc and free entries
-	voidptr_array *allocs;
-	voidptr_array *reallocs;
-	voidptr_array *frees;
+	//vector_t<memory_entry*>
+	vector_t *allocs;
+	//vector_t<memory_entry*>
+	vector_t *reallocs;
+	//vector_t<memory_entry*>
+	vector_t *frees;
 
 	//Index to pointer matching
-	voidptr_array *pointers;
-	//Entries per index (List<List<entry>>)
-	voidptr_array *entry_lookup;
+	//hashtable_t<void*, vector_t<memory_entry*>>
+	hashtable_t *entry_lookup;
+
+	size_t tick;
 } checker_status;
 
 
 
-static checker_status status = { .id_counter = 0, .allocs = NULL, .reallocs = NULL, .frees = NULL, .pointers = NULL, .entry_lookup = NULL };
+static checker_status status = { .allocs = NULL, .reallocs = NULL, .frees = NULL, .entry_lookup = NULL, .tick = 0 };
 
 
 
@@ -212,32 +158,18 @@ static void init_checker()
 {
 	if (status.allocs != NULL) return;
 
-	status.allocs = create_voidptr_array();
-	status.reallocs = create_voidptr_array();
-	status.frees = create_voidptr_array();
-	status.pointers = create_voidptr_array();
-	status.entry_lookup = create_voidptr_array();
+	status.allocs = vector_create();
+	status.reallocs = vector_create();
+	status.frees = vector_create();
+	status.entry_lookup = hashtable_create(hash_ptr, compare_ptr);
 
 	//Special null pointer case
-	append_voidptr_array(status.pointers, NULL);
-	append_voidptr_array(status.entry_lookup, create_voidptr_array());
-	status.id_counter = 1;
-}
-
-static size_t find_id(void *ptr)
-{
-	for (size_t i = status.pointers->count - 1; i > 0; i--)
-	{
-		if (status.pointers->data[i] == ptr)
-			return i;
-	}
-
-	return 0; //Both NULL and unlisted will be 0
+	hashtable_add(status.entry_lookup, NULL, create_voidptr_array());
 }
 
 
 
-memory_entry *create_memory_entry(int type, size_t id, void *old_ptr, void *new_ptr, size_t size, char *file_name, int line)
+memory_entry *create_memory_entry(int type, void *old_ptr, void *new_ptr, size_t size, char *file_name, int line)
 {
 	memory_entry *entry = malloc(sizeof(memory_entry));
 	DIE_NULL(entry);
@@ -245,13 +177,13 @@ memory_entry *create_memory_entry(int type, size_t id, void *old_ptr, void *new_
 	DIE_NULL(name);
 	strcpy(name, file_name);
 
-	entry->id = id;
 	entry->type = type;
 	entry->old_ptr = old_ptr;
 	entry->new_ptr = new_ptr;
 	entry->size = size;
 	entry->file_name = name;
 	entry->line = line;
+	entry->tick = ++status.tick;
 
 	return entry;
 }
@@ -281,23 +213,12 @@ void *checked_malloc(size_t size, char *file_name, int line)
 
 	void *ptr = malloc(size);
 
-	memory_entry *entry;
-	size_t id;
-
-	if (ptr == NULL)
-	{
-		id = 0;
-		entry = create_memory_entry(ENTRY_MALLOC, id, NULL, ptr, size, file_name, line);
-	}
-	else
-	{
-		id = status.id_counter++;
-		entry = create_memory_entry(ENTRY_MALLOC, id, NULL, ptr, size, file_name, line);
-		append_voidptr_array(status.pointers, ptr); //add index to pointer matching
-		append_voidptr_array(status.entry_lookup, create_voidptr_array()); //create lookup for new id
-	}
-	append_voidptr_array(status.allocs, entry); //add to alloc list
-	append_voidptr_array(status.entry_lookup->data[id], entry); //add first entry
+	//REVIEW: Pointer reuse after free handling?
+	vector_t *entry_vec = vector_create();
+	memory_entry *entry = create_memory_entry(ENTRY_MALLOC, NULL, ptr, size, file_name, line);
+	vector_append(entry_vec, entry);
+	hashtable_add(status.entry_lookup, ptr, entry_vec);
+	vector_append(status.allocs, entry); //add to alloc list
 
 	return ptr;
 }
@@ -306,25 +227,15 @@ void *checked_calloc(size_t nitems, size_t size, char *file_name, int line)
 {
 	init_checker();
 
-	void *ptr = malloc(size);
+	void *ptr = calloc(nitems, size);
 
-	memory_entry *entry;
-	size_t id;
-
-	if (ptr == NULL)
-	{
-		id = 0;
-		entry = create_memory_entry(ENTRY_CALLOC, id, NULL, ptr, size, file_name, line);
-	}
-	else
-	{
-		id = status.id_counter++;
-		entry = create_memory_entry(ENTRY_CALLOC, id, NULL, ptr, nitems * size, file_name, line);
-		append_voidptr_array(status.pointers, ptr); //add index to pointer matching
-		append_voidptr_array(status.entry_lookup, create_voidptr_array()); //create lookup for new id
-	}
-	append_voidptr_array(status.allocs, entry); //add to alloc list
-	append_voidptr_array(status.entry_lookup->data[id], entry); //add first entry
+	//REVIEW: Pointer reuse after free handling?
+	//REVIEW: Move logic to separate function to reuse for malloc/calloc
+	vector_t *entry_vec = vector_create();
+	memory_entry *entry = create_memory_entry(ENTRY_CALLOC, NULL, ptr, size, file_name, line);
+	vector_append(entry_vec, entry);
+	hashtable_add(status.entry_lookup, ptr, entry_vec);
+	vector_append(status.allocs, entry); //add to alloc list
 
 	return ptr;
 }
@@ -335,15 +246,33 @@ void *checked_realloc(void *ptr, size_t size, char *file_name, int line)
 
 	void *new_ptr = realloc(ptr, size);
 
-	size_t id = find_id(ptr);
-	memory_entry *entry = create_memory_entry(ENTRY_REALLOC, id, ptr, new_ptr, size, file_name, line);
-	append_voidptr_array(status.reallocs, entry);
+	memory_entry *entry = create_memory_entry(ENTRY_REALLOC, ptr, new_ptr, size, file_name, line);
 
-	//update id to pointer matching, if not NULL or unlisted
-	//if returned NULL, keep pointer to check for future frees
-	if (id != 0 && new_ptr != NULL)
-		status.pointers->data[id] = new_ptr;
-	append_voidptr_array(status.entry_lookup->data[id], entry);
+	if (!ptr)
+	{
+		vector_t *null_entries = hashtable_get(status.entry_lookup, NULL); //Hopefully won't ever return NULL
+		vector_append(null_entries, entry);
+		return new_ptr;
+	}
+
+	vector_append(status.reallocs, entry);
+
+	vector_t *pointer_entries;
+	
+	if (!new_ptr) //if returned NULL, keep pointer to check for future frees
+	{
+		pointer_entries = hashtable_get(status.entry_lookup, ptr);
+		vector_append(pointer_entries, entry);
+		return new_ptr;
+	}
+	if (hashtable_remove(status.entry_lookup, ptr, NULL, &pointer_entries) != SUS_SUCCESS)
+	{
+		//How did we even get here?
+		pointer_entries = vector_create();
+		fprintf(stderr, "ALLOC_CHECK WARN: checked_realloc received ptr not used before. This might be a problem with your code or with the library. Please analyze the report carefully and send it to the developer if you believe this is a library problem.\n");
+	}
+	vector_append(pointer_entries, entry);
+	hashtable_add(status.entry_lookup, new_ptr, pointer_entries);
 
 	return new_ptr;
 }
@@ -354,31 +283,37 @@ void checked_free(void *ptr, char *file_name, int line)
 
 	free(ptr);
 
-	size_t id = find_id(ptr);
-	memory_entry *entry = create_memory_entry(ENTRY_FREE, id, ptr, NULL, 0, file_name, line);
-	append_voidptr_array(status.frees, entry);
-	append_voidptr_array(status.entry_lookup->data[id], entry);
+	memory_entry *entry = create_memory_entry(ENTRY_FREE, ptr, NULL, 0, file_name, line);
+	vector_append(status.frees, entry);
+
+	vector_t *pointer_entries = hashtable_get(status.entry_lookup, ptr);
+	vector_append(pointer_entries, entry);
 
 	//In most cases, block won't be touched after free, so we can trim to reduce memory usage
-	//Id is preserved in case the block is referenced again
-	trim_voidptr_array(status.entry_lookup->data[id]);
+	vector_trim(pointer_entries);
 }
 #pragma GCC diagnostic pop
 
 
 
-static void find_lost_blocks(size_t **block_array, size_t *block_count, size_t *total_size)
+static vector_t *find_lost_blocks(size_t *total_size)
 {
 	size_t *blockv = NULL;
-	size_t blockc = 0;
 	size_t size = 0;
 
-	//Skip id=0 (NULL/invalid)
-	for (size_t i = 1; i < status.entry_lookup->count; i++)
+	vector_t *blocks = vector_create();
+	vector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
+
+	for (size_t i = 0; i < entry_lists->count; i++)
 	{
+		//Skip NULL entry list
+		if (entry_lists->count)
+			if (!((memory_entry*)entry_lists->data[0])->old_ptr)
+				continue;
+
 		char freed = 0;
 		size_t last_size = 0;
-		voidptr_array *current_block = status.entry_lookup->data[i];
+		vector_t *current_block = entry_lists->data[i];
 
 		for (size_t j = 0; j < current_block->count; j++)
 		{
@@ -388,64 +323,37 @@ static void find_lost_blocks(size_t **block_array, size_t *block_count, size_t *
 			if (current_entry->type == ENTRY_FREE)
 			{
 				freed = 1;
-				break; //REVIEW: Break needed? should be last entry
+				break;
 			}
 		}
 
 		if (!freed)
 		{
-			blockc++;
+			vector_append(blocks, current_block);
 			size += last_size;
 		}
 	}
 
-	blockv = malloc(blockc * sizeof(size_t));
-	DIE_NULL(blockv);
-
-	//Skip id=0 (NULL/invalid)
-	for (size_t i = 1, head = 0; i < status.entry_lookup->count && head < blockc; i++)
-	{
-		char freed = 0;
-		voidptr_array *current_block = status.entry_lookup->data[i];
-
-		for (size_t j = 0; j < current_block->count; j++)
-		{
-			memory_entry *current_entry = current_block->data[j];
-
-			if (current_entry->type == ENTRY_FREE)
-			{
-				freed = 1;
-				break; //REVIEW: Break needed? should be last entry
-			}
-		}
-
-		if (!freed)
-		{
-			blockv[head++] = i;
-		}
-	}
-
-	*block_array = blockv;
-	*block_count = blockc;
 	*total_size = size;
+
+	return blocks;
 }
-static void print_missing_frees(size_t *block_array, size_t block_count)
+static void print_missing_frees(vector_t *lost_blocks)
 {
-	if (block_count == 0)
+	if (lost_blocks->count == 0)
 	{
 		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
 		printf("| No missing frees.                                                    |\n");
 		return;
 	}
 
-	for (size_t i = 0; i < block_count; i++)
+	for (size_t i = 0; i < lost_blocks->count; i++)
 	{
-		size_t block = block_array[i];
-		voidptr_array *entries = status.entry_lookup->data[block];
+		vector_t *entries = lost_blocks->data[i];
 		memory_entry *entry = entries->data[entries->count - 1];
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
-		printf("|Block #%-5ld: %-6s, has %-5ld entries:                              |\n", block, format_size(entry->size), entries->count);
+		printf("|Block #%-5ld: %-6s, has %-5ld entries:                              |\n", , format_size(entry->size), entries->count);
 
 		set_color(COLOR_RED, COLOR_DEFAULT, 0);
 		for (size_t j = 0; j < entries->count; j++)
@@ -843,8 +751,8 @@ void report_alloc_checks()
 	size_t reallocs = status.reallocs->count;
 	size_t frees = status.frees->count;
 
-	size_t blocks_lost, memory_lost, *lost_blocks_v;
-	find_lost_blocks(&lost_blocks_v, &blocks_lost, &memory_lost);
+	size_t memory_lost;
+	vector_t *lost_blocks = find_lost_blocks(&memory_lost);
 
 	size_t zero_allocs, zero_reallocs, *zero_allocs_v, *zero_reallocs_v;
 	find_zero_re_allocs(&zero_allocs_v, &zero_reallocs_v, &zero_allocs, &zero_reallocs);
@@ -868,7 +776,7 @@ void report_alloc_checks()
 	printf("|Total NULL reallocs/frees: %-5ld/%-5ld                                |\n", null_reallocs, null_frees);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Missing frees-------------------------------------------------------+\n");
-	print_missing_frees(lost_blocks_v, blocks_lost);
+	print_missing_frees(lost_blocks);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Invalid operations--------------------------------------------------+\n");
 	print_zero_allocs(zero_allocs_v, zero_allocs);
@@ -885,7 +793,7 @@ void report_alloc_checks()
 	printf("+======================================================================+\n");
 	set_color(COLOR_DEFAULT, COLOR_DEFAULT, 0);
 
-	free(lost_blocks_v);
+	vector_destroy(lost_blocks);
 	free(zero_allocs_v);
 	free(zero_reallocs_v);
 	free(failed_reallocs_v);
