@@ -164,7 +164,7 @@ static void init_checker()
 	status.entry_lookup = hashtable_create(hash_ptr, compare_ptr);
 
 	//Special null pointer case
-	hashtable_add(status.entry_lookup, NULL, create_voidptr_array());
+	hashtable_add(status.entry_lookup, NULL, vector_create());
 }
 
 
@@ -205,6 +205,7 @@ char *entry_type_str(int type)
 
 
 
+//TODO: Review need/location
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuse-after-free"
 void *checked_malloc(size_t size, char *file_name, int line)
@@ -265,7 +266,7 @@ void *checked_realloc(void *ptr, size_t size, char *file_name, int line)
 		vector_append(pointer_entries, entry);
 		return new_ptr;
 	}
-	if (hashtable_remove(status.entry_lookup, ptr, NULL, &pointer_entries) != SUS_SUCCESS)
+	if (hashtable_remove(status.entry_lookup, ptr, NULL, (void**)&pointer_entries) != SUS_SUCCESS)
 	{
 		//How did we even get here?
 		pointer_entries = vector_create();
@@ -298,7 +299,6 @@ void checked_free(void *ptr, char *file_name, int line)
 
 static vector_t *find_lost_blocks(size_t *total_size)
 {
-	size_t *blockv = NULL;
 	size_t size = 0;
 
 	vector_t *blocks = vector_create();
@@ -335,6 +335,7 @@ static vector_t *find_lost_blocks(size_t *total_size)
 	}
 
 	*total_size = size;
+	vector_destroy(entry_lists);
 
 	return blocks;
 }
@@ -353,7 +354,7 @@ static void print_missing_frees(vector_t *lost_blocks)
 		memory_entry *entry = entries->data[entries->count - 1];
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
-		printf("|Block #%-5ld: %-6s, has %-5ld entries:                              |\n", , format_size(entry->size), entries->count);
+		printf("|Block #%-5ld: %-6s, has %-5ld entries:                              |\n", i, format_size(entry->size), entries->count); //REVIEW: Block number
 
 		set_color(COLOR_RED, COLOR_DEFAULT, 0);
 		for (size_t j = 0; j < entries->count; j++)
@@ -364,14 +365,15 @@ static void print_missing_frees(vector_t *lost_blocks)
 	}
 }
 
-static void find_zero_re_allocs(size_t **alloc_array, size_t **realloc_array, size_t *zero_alloc_count, size_t *zero_realloc_count)
+static void find_zero_re_allocs(vector_t **alloc_vector, vector_t **realloc_vector)
 {
-	size_t *allocv = NULL, *reallocv = NULL;
-	size_t allocc = 0, reallocc = 0;
+	vector_t *allocs = vector_create();
+	vector_t *reallocs = vector_create();
+	vector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
 
-	for (size_t i = 0; i < status.entry_lookup->count; i++)
+	for (size_t i = 0; i < entry_lists->count; i++)
 	{
-		voidptr_array *current_block = status.entry_lookup->data[i];
+		vector_t *current_block = entry_lists->data[i];
 
 		for (size_t j = 0; j < current_block->count; j++)
 		{
@@ -379,51 +381,25 @@ static void find_zero_re_allocs(size_t **alloc_array, size_t **realloc_array, si
 
 			if ((current_entry->type == ENTRY_MALLOC || current_entry->type == ENTRY_CALLOC) && current_entry->size == 0)
 			{
-				allocc++;
+				vector_append(allocs, current_block);
 				break;
 			}
 			else if (current_entry->type == ENTRY_REALLOC && current_entry->size == 0)
 			{
-				reallocc++;
+				vector_append(reallocs, current_block);
 				break;
 			}
 		}
 	}
 
-	allocv = malloc(allocc * sizeof(size_t));
-	DIE_NULL(allocv);
-	reallocv = malloc(reallocc * sizeof(size_t));
-	DIE_NULL(reallocv);
+	vector_destroy(entry_lists);
 
-	for (size_t i = 0, ahead = 0, rhead = 0; i < status.entry_lookup->count && (ahead < allocc || rhead < reallocc); i++)
-	{
-		voidptr_array *current_block = status.entry_lookup->data[i];
-
-		for (size_t j = 0; j < current_block->count; j++)
-		{
-			memory_entry *current_entry = current_block->data[j];
-
-			if ((current_entry->type == ENTRY_MALLOC || current_entry->type == ENTRY_CALLOC) && current_entry->size == 0)
-			{
-				allocv[ahead++] = i;
-				break;
-			}
-			else if (current_entry->type == ENTRY_REALLOC && current_entry->size == 0)
-			{
-				reallocv[rhead++] = i;
-				break;
-			}
-		}
-	}
-
-	*alloc_array = allocv;
-	*realloc_array = reallocv;
-	*zero_alloc_count = allocc;
-	*zero_realloc_count = reallocc;
+	*alloc_vector = allocs;
+	*realloc_vector = reallocs;
 }
-static void print_zero_allocs(size_t *block_array, size_t zero_alloc_count)
+static void print_zero_allocs(vector_t *alloc_vector)
 {
-	if (zero_alloc_count == 0)
+	if (alloc_vector->count == 0)
 	{
 		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
 		printf("| No zero-sized allocs.                                                |\n");
@@ -433,14 +409,13 @@ static void print_zero_allocs(size_t *block_array, size_t zero_alloc_count)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===Zero-sized allocs===                                              |\n");
 
-	for (size_t i = 0; i < zero_alloc_count; i++)
+	for (size_t i = 0; i < alloc_vector->count; i++)
 	{
-		size_t block = block_array[i];
-		voidptr_array *entries = status.entry_lookup->data[block];
+		vector_t *entries = alloc_vector->data[i];
 		memory_entry *entry;
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
-		printf("|Block #%-5ld has %-5ld entries:                                       |\n", block, entries->count);
+		printf("|Block #%-5ld has %-5ld entries:                                       |\n", i, entries->count);  //REVIEW: Block number
 
 		for (size_t j = 0; j < entries->count; j++)
 		{
@@ -458,9 +433,9 @@ static void print_zero_allocs(size_t *block_array, size_t zero_alloc_count)
 		}
 	}
 }
-static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
+static void print_zero_reallocs(vector_t *realloc_vector)
 {
-	if (zero_realloc_count == 0)
+	if (realloc_vector->count == 0)
 	{
 		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
 		printf("| No zero-sized reallocs.                                              |\n");
@@ -470,14 +445,13 @@ static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===Zero-sized reallocs===                                            |\n");
 
-	for (size_t i = 0; i < zero_realloc_count; i++)
+	for (size_t i = 0; i < realloc_vector->count; i++)
 	{
-		size_t block = block_array[i];
-		voidptr_array *entries = status.entry_lookup->data[block];
+		vector_t *entries = realloc_vector->data[i];
 		memory_entry *entry;
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
-		printf("|Block #%-5ld has %-5ld entries:                                       |\n", block, entries->count);
+		printf("|Block #%-5ld has %-5ld entries:                                       |\n", i, entries->count);  //REVIEW: Block number
 
 		for (size_t j = 0; j < entries->count; j++)
 		{
@@ -496,14 +470,14 @@ static void print_zero_reallocs(size_t *block_array, size_t zero_realloc_count)
 	}
 }
 
-static void find_failed_re_allocs(size_t **failed_reallocs_v, size_t *failed_allocs, size_t *failed_reallocs)
+static void find_failed_re_allocs(vector_t **failed_reallocs, size_t *failed_allocs)
 {
-	//REMINDER: Ignore zero-sized ops that return NULL, shown separately
+	//REVIEW: Ignore zero-sized ops that return NULL, shown separately
 
-	size_t *reallocv = NULL;
-	size_t allocc = 0, reallocc = 0;
+	vector_t *reallocs = vector_create();
+	size_t allocc = 0;
 
-	voidptr_array *null_block = status.entry_lookup->data[0];
+	vector_t *null_block = status.entry_lookup->data[0]; //TODO: libsus implement hashable find
 
 	for (size_t i = 0; i < null_block->count; i++)
 	{
@@ -512,24 +486,11 @@ static void find_failed_re_allocs(size_t **failed_reallocs_v, size_t *failed_all
 		if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size != 0) allocc++;
 	}
 
-	for (size_t i = 1; i < status.entry_lookup->count; i++)
+	vector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
+
+	for (size_t i = 0; i < entry_lists->count; i++)
 	{
-		voidptr_array *cur_block = status.entry_lookup->data[i];
-
-		for (size_t j = 0; j < cur_block->count; j++)
-		{
-			memory_entry *entry = cur_block->data[j];
-
-			if (entry->type == ENTRY_REALLOC && entry->size != 0 && entry->new_ptr == NULL) reallocc++;
-		}
-	}
-
-	reallocv = malloc(reallocc * sizeof(size_t));
-	DIE_NULL(reallocv);
-
-	for (size_t i = 1, head = 0; i < status.entry_lookup->count && head < reallocc; i++)
-	{
-		voidptr_array *cur_block = status.entry_lookup->data[i];
+		vector_t *cur_block =  entry_lists->data[i];
 
 		for (size_t j = 0; j < cur_block->count; j++)
 		{
@@ -537,15 +498,16 @@ static void find_failed_re_allocs(size_t **failed_reallocs_v, size_t *failed_all
 
 			if (entry->type == ENTRY_REALLOC && entry->size != 0 && entry->new_ptr == NULL)
 			{
-				reallocv[head++] = i;
+				vector_append(reallocs, cur_block);
 				break;
 			}
 		}
 	}
 
-	*failed_reallocs_v = reallocv;
+	vector_destroy(entry_lists);
+
 	*failed_allocs = allocc;
-	*failed_reallocs = reallocc;
+	*failed_reallocs = reallocs;
 }
 static void print_failed_allocs(size_t failed_allocs)
 {
@@ -559,7 +521,7 @@ static void print_failed_allocs(size_t failed_allocs)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===Failed allocs===                                                  |\n");
 
-	voidptr_array *null_block = status.entry_lookup->data[0];
+	vector_t *null_block = status.entry_lookup->data[0]; //TODO: libsus implement hashable find
 
 	set_color(COLOR_RED, COLOR_DEFAULT, 0);
 	for (size_t i = 0; i < null_block->count; i++)
@@ -570,9 +532,9 @@ static void print_failed_allocs(size_t failed_allocs)
 			printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
 	}
 }
-static void print_failed_reallocs(size_t *block_array, size_t failed_reallocs)
+static void print_failed_reallocs(vector_t *failed_reallocs)
 {
-	if (failed_reallocs == 0)
+	if (failed_reallocs->count == 0)
 	{
 		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
 		printf("| No failed reallocs.                                                  |\n");
@@ -582,14 +544,13 @@ static void print_failed_reallocs(size_t *block_array, size_t failed_reallocs)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===Failed reallocs===                                                |\n");
 
-	for (size_t i = 0; i < failed_reallocs; i++)
+	for (size_t i = 0; i < failed_reallocs->count; i++)
 	{
-		size_t block = block_array[i];
-		voidptr_array *entries = status.entry_lookup->data[block];
+		vector_t *entries = failed_reallocs->data[i];
 		memory_entry *entry;
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
-		printf("|Block #%-5ld has %-5ld entries:                                       |\n", block, entries->count);
+		printf("|Block #%-5ld has %-5ld entries:                                       |\n", i, entries->count);
 
 		for (size_t j = 0; j < entries->count; j++)
 		{
@@ -754,8 +715,8 @@ void report_alloc_checks()
 	size_t memory_lost;
 	vector_t *lost_blocks = find_lost_blocks(&memory_lost);
 
-	size_t zero_allocs, zero_reallocs, *zero_allocs_v, *zero_reallocs_v;
-	find_zero_re_allocs(&zero_allocs_v, &zero_reallocs_v, &zero_allocs, &zero_reallocs);
+	vector_t *zero_allocs, *zero_reallocs;
+	find_zero_re_allocs(&zero_allocs, &zero_reallocs);
 	
 	size_t failed_allocs, failed_reallocs, *failed_reallocs_v;
 	find_failed_re_allocs(&failed_reallocs_v, &failed_allocs, &failed_reallocs);
@@ -770,8 +731,8 @@ void report_alloc_checks()
 	printf("+--Statistics----------------------------------------------------------+\n");
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("|Total allocs/reallocs/frees: %-5ld/%-5ld/%-5ld                        |\n", allocs, reallocs, frees);
-	printf("|Total blocks/memory lost: %-5ld/~%-6s                               |\n", blocks_lost, format_size(memory_lost));
-	printf("|Total zero-sized allocs/reallocs: %-5ld/%-5ld                         |\n", zero_allocs, zero_reallocs);
+	printf("|Total blocks/memory lost: %-5ld/~%-6s                               |\n", lost_blocks->count, format_size(memory_lost));
+	printf("|Total zero-sized allocs/reallocs: %-5ld/%-5ld                         |\n", zero_allocs->count, zero_reallocs->count);
 	printf("|Total failed allocs/reallocs: %-5ld/%-5ld                             |\n", failed_allocs, failed_reallocs);
 	printf("|Total NULL reallocs/frees: %-5ld/%-5ld                                |\n", null_reallocs, null_frees);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
@@ -779,8 +740,8 @@ void report_alloc_checks()
 	print_missing_frees(lost_blocks);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Invalid operations--------------------------------------------------+\n");
-	print_zero_allocs(zero_allocs_v, zero_allocs);
-	print_zero_reallocs(zero_reallocs_v, zero_reallocs);
+	print_zero_allocs(zero_allocs);
+	print_zero_reallocs(zero_reallocs);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Failed (re)allocations----------------------------------------------+\n");
 	print_failed_allocs(failed_allocs);
@@ -794,8 +755,8 @@ void report_alloc_checks()
 	set_color(COLOR_DEFAULT, COLOR_DEFAULT, 0);
 
 	vector_destroy(lost_blocks);
-	free(zero_allocs_v);
-	free(zero_reallocs_v);
+	vector_destroy(zero_allocs);
+	vector_destroy(zero_reallocs);
 	free(failed_reallocs_v);
 }
 
@@ -831,19 +792,14 @@ void cleanup_alloc_checks()
 	for (size_t i = 0; i < status.frees->count; i++)
 		destroy_memory_entry(status.frees->data[i]);
 
-	for (size_t i = 0; i < status.entry_lookup->count; i++)
-		destroy_voidptr_array(status.entry_lookup->data[i]);
+	vector_destroy(status.allocs);
+	vector_destroy(status.reallocs);
+	vector_destroy(status.frees);
+	hashtable_destroy(status.entry_lookup);
 
-	destroy_voidptr_array(status.allocs);
-	destroy_voidptr_array(status.reallocs);
-	destroy_voidptr_array(status.frees);
-	destroy_voidptr_array(status.pointers);
-	destroy_voidptr_array(status.entry_lookup);
-
-	status.id_counter = 0;
 	status.allocs = NULL;
 	status.reallocs = NULL;
 	status.frees = NULL;
-	status.pointers = NULL;
 	status.entry_lookup = NULL;
+	status.tick = 0;
 }
