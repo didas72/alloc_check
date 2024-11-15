@@ -470,27 +470,27 @@ static void print_zero_reallocs(vector_t *realloc_vector)
 	}
 }
 
-static void find_failed_re_allocs(vector_t **failed_reallocs, size_t *failed_allocs)
+static void find_failed_re_allocs(size_t *failed_alloc_c, vector_t **failed_reallocs)
 {
 	//REVIEW: Ignore zero-sized ops that return NULL, shown separately
 
 	vector_t *reallocs = vector_create();
-	size_t allocc = 0;
+	size_t alloc_c = 0;
 
-	vector_t *null_block = status.entry_lookup->data[0]; //TODO: libsus implement hashable find
+	vector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
 	for (size_t i = 0; i < null_block->count; i++)
 	{
 		memory_entry *entry = null_block->data[i];
 
-		if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size != 0) allocc++;
+		if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size != 0) alloc_c++;
 	}
 
 	vector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
 
 	for (size_t i = 0; i < entry_lists->count; i++)
 	{
-		vector_t *cur_block =  entry_lists->data[i];
+		vector_t *cur_block = entry_lists->data[i];
 
 		for (size_t j = 0; j < cur_block->count; j++)
 		{
@@ -506,12 +506,12 @@ static void find_failed_re_allocs(vector_t **failed_reallocs, size_t *failed_all
 
 	vector_destroy(entry_lists);
 
-	*failed_allocs = allocc;
+	*failed_alloc_c = alloc_c;
 	*failed_reallocs = reallocs;
 }
-static void print_failed_allocs(size_t failed_allocs)
+static void print_failed_allocs(size_t failed_alloc_c)
 {
-	if (failed_allocs == 0)
+	if (failed_alloc_c == 0)
 	{
 		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
 		printf("| No failed allocs.                                                    |\n");
@@ -521,12 +521,12 @@ static void print_failed_allocs(size_t failed_allocs)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===Failed allocs===                                                  |\n");
 
-	vector_t *null_block = status.entry_lookup->data[0]; //TODO: libsus implement hashable find
+	vector_t *failed_allocs = hashtable_get(status.entry_lookup, NULL);
 
 	set_color(COLOR_RED, COLOR_DEFAULT, 0);
-	for (size_t i = 0; i < null_block->count; i++)
+	for (size_t i = 0; i < failed_allocs->count; i++)
 	{
-		memory_entry *entry = null_block->data[i];
+		memory_entry *entry = failed_allocs->data[i];
 
 		if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size != 0)
 			printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
@@ -573,7 +573,7 @@ static void find_null_reallocs_frees(size_t *null_reallocs, size_t *null_frees)
 {
 	size_t reallocc = 0, freec = 0;
 
-	voidptr_array *null_block = status.entry_lookup->data[0];
+	vector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
 	for (size_t i = 0; i < null_block->count; i++)
 	{
@@ -598,7 +598,7 @@ static void print_null_reallocs(size_t null_reallocs)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===NULL reallocs===                                                  |\n");
 
-	voidptr_array *null_block = status.entry_lookup->data[0];
+	vector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
 	set_color(COLOR_RED, COLOR_DEFAULT, 0);
 	for (size_t i = 0; i < null_block->count; i++)
@@ -621,7 +621,7 @@ static void print_null_frees(size_t null_frees)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===NULL frees===                                                     |\n");
 
-	voidptr_array *null_block = status.entry_lookup->data[0];
+	vector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
 	set_color(COLOR_RED, COLOR_DEFAULT, 0);
 	for (size_t i = 0; i < null_block->count; i++)
@@ -718,8 +718,9 @@ void report_alloc_checks()
 	vector_t *zero_allocs, *zero_reallocs;
 	find_zero_re_allocs(&zero_allocs, &zero_reallocs);
 	
-	size_t failed_allocs, failed_reallocs, *failed_reallocs_v;
-	find_failed_re_allocs(&failed_reallocs_v, &failed_allocs, &failed_reallocs);
+	size_t failed_alloc_c;
+	vector_t *failed_reallocs;
+	find_failed_re_allocs(&failed_alloc_c, &failed_reallocs);
 
 	size_t null_reallocs, null_frees;
 	find_null_reallocs_frees(&null_reallocs, &null_frees);
@@ -733,7 +734,7 @@ void report_alloc_checks()
 	printf("|Total allocs/reallocs/frees: %-5ld/%-5ld/%-5ld                        |\n", allocs, reallocs, frees);
 	printf("|Total blocks/memory lost: %-5ld/~%-6s                               |\n", lost_blocks->count, format_size(memory_lost));
 	printf("|Total zero-sized allocs/reallocs: %-5ld/%-5ld                         |\n", zero_allocs->count, zero_reallocs->count);
-	printf("|Total failed allocs/reallocs: %-5ld/%-5ld                             |\n", failed_allocs, failed_reallocs);
+	printf("|Total failed allocs/reallocs: %-5ld/%-5ld                             |\n", failed_alloc_c, failed_reallocs->count);
 	printf("|Total NULL reallocs/frees: %-5ld/%-5ld                                |\n", null_reallocs, null_frees);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Missing frees-------------------------------------------------------+\n");
@@ -744,8 +745,8 @@ void report_alloc_checks()
 	print_zero_reallocs(zero_reallocs);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Failed (re)allocations----------------------------------------------+\n");
-	print_failed_allocs(failed_allocs);
-	print_failed_reallocs(failed_reallocs_v, failed_reallocs);
+	print_failed_allocs(failed_alloc_c);
+	print_failed_reallocs(failed_reallocs);
 	set_color(COLOR_ORANGE, COLOR_DEFAULT, 0);
 	printf("+--Possible mistakes---------------------------------------------------+\n");
 	print_null_reallocs(null_reallocs);
@@ -757,7 +758,7 @@ void report_alloc_checks()
 	vector_destroy(lost_blocks);
 	vector_destroy(zero_allocs);
 	vector_destroy(zero_reallocs);
-	free(failed_reallocs_v);
+	vector_destroy(failed_reallocs);
 }
 
 void list_all_entries()
