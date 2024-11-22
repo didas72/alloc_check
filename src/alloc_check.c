@@ -351,6 +351,7 @@ static void print_missing_frees(vector_t *lost_blocks)
 	for (size_t i = 0; i < lost_blocks->count; i++)
 	{
 		vector_t *entries = lost_blocks->data[i];
+		if (!entries->count) continue;
 		memory_entry *entry = entries->data[entries->count - 1];
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);

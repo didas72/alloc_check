@@ -26,7 +26,7 @@ $(DIR_BUILD)/obj/%.o: $(DIR_SRC)/%.c
 	$(CC) $(C_FLAGS) -I$(DIR_INC) -c $< -o $@
 
 clean:
-	$(RM) -r $(DIR_OBJ) $(DIR_BUILD)
+	$(RM) -r $(DIR_BUILD)
 
 loc:
 	scc -s lines --no-cocomo --no-gitignore -w --size-unit binary --exclude-ext md,makefiles

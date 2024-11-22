@@ -17,10 +17,10 @@
 
 
 #include <stddef.h>
+#include <stdlib.h>
 
 
 #ifdef USE_STANDARD_MEM
-#include <stdlib.h>
 #define CHKD_MALLOC(size) malloc(size)
 #define CHKD_CALLOC(nitems, size) calloc(nitems, size)
 #define CHKD_REALLOC(ptr, size) realloc(ptr, size)
@@ -37,6 +37,8 @@
 //Poison identifiers to prevent their use
 #pragma GCC poison malloc calloc realloc free
 #endif
+
+#define ALLOC_CHECK_SETUP do { atexit(&cleanup_alloc_checks); atexit(&report_alloc_checks); } while (0)
 
 
 void *checked_malloc(size_t size, char *file_name, int line);
