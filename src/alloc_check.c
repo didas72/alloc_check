@@ -10,7 +10,7 @@
 
 
 //Allow the use of standard alloc, realloc and free
-#define ALLOW_STANDARD_MEM
+#define USE_STANDARD_MEM
 #include "alloc_check.h"
 
 #include <stdio.h>

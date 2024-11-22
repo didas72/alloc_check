@@ -21,25 +21,14 @@
 
 
 #ifdef USE_STANDARD_MEM
-#define CHKD_MALLOC(size) malloc(size)
-#define CHKD_CALLOC(nitems, size) calloc(nitems, size)
-#define CHKD_REALLOC(ptr, size) realloc(ptr, size)
-#define CHKD_FREE(ptr) free(ptr);
+#define ALLOC_CHECK_SETUP() do {} while(0)
 #else
-#define CHKD_MALLOC(size) checked_malloc(size, __FILE__, __LINE__)
-#define CHKD_CALLOC(nitems, size) checked_calloc(nitems, size, __FILE__, __LINE__)
-#define CHKD_REALLOC(ptr, size) checked_realloc(ptr, size, __FILE__, __LINE__)
-#define CHKD_FREE(ptr) checked_free(ptr, __FILE__, __LINE__)
+#define malloc(size) checked_malloc(size, __FILE__, __LINE__)
+#define calloc(nitems, size) checked_calloc(nitems, size, __FILE__, __LINE__)
+#define realloc(ptr, size) checked_realloc(ptr, size, __FILE__, __LINE__)
+#define free(ptr) checked_free(ptr, __FILE__, __LINE__)
+#define ALLOC_CHECK_SETUP() do { atexit(&cleanup_alloc_checks); atexit(&report_alloc_checks); } while (0)
 #endif
-
-
-#ifndef ALLOW_STANDARD_MEM
-//Poison identifiers to prevent their use
-#pragma GCC poison malloc calloc realloc free
-#endif
-
-#define ALLOC_CHECK_SETUP do { atexit(&cleanup_alloc_checks); atexit(&report_alloc_checks); } while (0)
-
 
 void *checked_malloc(size_t size, char *file_name, int line);
 void *checked_calloc(size_t nitems, size_t size, char *file_name, int line);
