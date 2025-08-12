@@ -1,7 +1,7 @@
 AR=ar
 AR_FLAGS=rcs
 CC=gcc
-C_FLAGS=-O2 -Wall -Wextra -Wno-unused-result
+C_FLAGS=-O2 -Wall -Wextra -Wno-unused-result -DSUS_TARGET_VERSION=10000
 
 DIR_SRC=src
 DIR_INC=include

@@ -134,15 +134,15 @@ typedef struct memory_entry
 typedef struct checker_status
 {
 	//Each [m/c]alloc, realloc and free entries
-	//vector_t<memory_entry*>
-	vector_t *allocs;
-	//vector_t<memory_entry*>
-	vector_t *reallocs;
-	//vector_t<memory_entry*>
-	vector_t *frees;
+	//ivector_t<memory_entry>
+	ivector_t *allocs;
+	//ivector_t<memory_entry>
+	ivector_t *reallocs;
+	//ivector_t<memory_entry>
+	ivector_t *frees;
 
 	//Index to pointer matching
-	//hashtable_t<void*, vector_t<memory_entry*>>
+	//hashtable_t<void*, ivector_t<memory_entry>*>
 	hashtable_t *entry_lookup;
 
 	size_t tick;
@@ -158,13 +158,13 @@ static void init_checker()
 {
 	if (status.allocs != NULL) return;
 
-	status.allocs = vector_create();
-	status.reallocs = vector_create();
-	status.frees = vector_create();
+	status.allocs = ivector_create(sizeof(memory_entry));
+	status.reallocs = ivector_create(sizeof(memory_entry));
+	status.frees = ivector_create(sizeof(memory_entry));
 	status.entry_lookup = hashtable_create(hash_ptr, compare_ptr);
 
 	//Special null pointer case
-	hashtable_add(status.entry_lookup, NULL, vector_create());
+	hashtable_add(status.entry_lookup, NULL, ivector_create(sizeof(memory_entry)));
 }
 
 
@@ -197,12 +197,12 @@ char *entry_type_str(int type)
 	if (type == 2) return "CALLOC";
 	if (type == 3) return "REALLOC";
 	if (type == 4) return "FREE";
-	return "";
+	return "???";
 }
 
 
 
-//TODO: Review need/location
+//TODO: Review need/location of diagnostics. Also not portable with other compilers
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wuse-after-free"
 void *checked_malloc(size_t size, char *file_name, int line)
@@ -212,11 +212,12 @@ void *checked_malloc(size_t size, char *file_name, int line)
 	void *ptr = malloc(size);
 
 	//REVIEW: Pointer reuse after free handling?
-	vector_t *entry_vec = vector_create();
+	//ivector_t<memory_entry>
+	ivector_t *entry_vec = ivector_create(sizeof(memory_entry));
 	memory_entry *entry = create_memory_entry(ENTRY_MALLOC, NULL, ptr, size, file_name, line);
-	vector_append(entry_vec, entry);
+	ivector_append(entry_vec, entry);
 	hashtable_add(status.entry_lookup, ptr, entry_vec);
-	vector_append(status.allocs, entry); //add to alloc list
+	ivector_append(status.allocs, entry); //Add to alloc list
 
 	return ptr;
 }
@@ -229,11 +230,12 @@ void *checked_calloc(size_t nitems, size_t size, char *file_name, int line)
 
 	//REVIEW: Pointer reuse after free handling?
 	//REVIEW: Move logic to separate function to reuse for malloc/calloc
-	vector_t *entry_vec = vector_create();
+	//ivector_t<memory_entry>
+	ivector_t *entry_vec = ivector_create(sizeof(memory_entry));
 	memory_entry *entry = create_memory_entry(ENTRY_CALLOC, NULL, ptr, size, file_name, line);
-	vector_append(entry_vec, entry);
+	ivector_append(entry_vec, entry);
 	hashtable_add(status.entry_lookup, ptr, entry_vec);
-	vector_append(status.allocs, entry); //add to alloc list
+	ivector_append(status.allocs, entry); //Add to alloc list
 
 	return ptr;
 }
@@ -243,33 +245,34 @@ void *checked_realloc(void *ptr, size_t size, char *file_name, int line)
 	init_checker();
 
 	void *new_ptr = realloc(ptr, size);
-
+	
 	memory_entry *entry = create_memory_entry(ENTRY_REALLOC, ptr, new_ptr, size, file_name, line);
 
 	if (!ptr)
 	{
-		vector_t *null_entries = hashtable_get(status.entry_lookup, NULL); //Hopefully won't ever return NULL
-		vector_append(null_entries, entry);
+		ivector_t *null_entries = hashtable_get(status.entry_lookup, NULL); //Hopefully won't ever return NULL
+		ivector_append(null_entries, entry);
 		return new_ptr;
 	}
 
-	vector_append(status.reallocs, entry);
+	ivector_append(status.reallocs, entry);
 
-	vector_t *pointer_entries;
+	//ivector_t<memory_entry>
+	ivector_t *pointer_entries;
 	
 	if (!new_ptr) //if returned NULL, keep pointer to check for future frees
 	{
 		pointer_entries = hashtable_get(status.entry_lookup, ptr);
-		vector_append(pointer_entries, entry);
+		ivector_append(pointer_entries, entry);
 		return new_ptr;
 	}
 	if (hashtable_remove(status.entry_lookup, ptr, NULL, (void**)&pointer_entries) != SUS_SUCCESS)
 	{
 		//How did we even get here?
-		pointer_entries = vector_create();
+		pointer_entries = ivector_create(sizeof(memory_entry));
 		fprintf(stderr, "ALLOC_CHECK WARN: checked_realloc received ptr not used before. This might be a problem with your code or with the library. Please analyze the report carefully and send it to the developer if you believe this is a library problem.\n");
 	}
-	vector_append(pointer_entries, entry);
+	ivector_append(pointer_entries, entry);
 	hashtable_add(status.entry_lookup, new_ptr, pointer_entries);
 
 	return new_ptr;
@@ -282,39 +285,51 @@ void checked_free(void *ptr, char *file_name, int line)
 	free(ptr);
 
 	memory_entry *entry = create_memory_entry(ENTRY_FREE, ptr, NULL, 0, file_name, line);
-	vector_append(status.frees, entry);
+	ivector_append(status.frees, entry);
 
-	vector_t *pointer_entries = hashtable_get(status.entry_lookup, ptr);
-	vector_append(pointer_entries, entry);
+	ivector_t *pointer_entries = hashtable_get(status.entry_lookup, ptr);
+	ivector_append(pointer_entries, entry);
 
 	//In most cases, block won't be touched after free, so we can trim to reduce memory usage
-	vector_trim(pointer_entries);
+	ivector_trim(pointer_entries);
 }
 #pragma GCC diagnostic pop
 
 
 
-static vector_t *find_lost_blocks(size_t *total_size)
+/// @brief Find all lost (not freed) blocks
+/// @param total_size Pointer to store total lost memory size
+/// @return ivector<ivector_t<memory_entry>*> containing lost blocks
+static ivector_t *find_lost_blocks(size_t *total_size)
 {
 	size_t size = 0;
 
-	vector_t *blocks = vector_create();
-	vector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
+	//ivector_t<ivector_t<memory_entry>*>
+	ivector_t *blocks = ivector_create(sizeof(ivector_t*));
+	//ivector_t<ivector_t<memory_entry>*>
+	ivector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
 
-	for (size_t i = 0; i < entry_lists->count; i++)
+	size_t block_count = ivector_get_count(entry_lists);
+	for (size_t i = 0; i < block_count; i++)
 	{
-		//Skip NULL entry list
-		if (entry_lists->count)
-			if (!((memory_entry*)entry_lists->data[0])->old_ptr)
-				continue;
-
 		char freed = 0;
 		size_t last_size = 0;
-		vector_t *current_block = entry_lists->data[i];
+		//ivector_t<memory_entry>
+		ivector_t *current_block;
+		ivector_fetch(entry_lists, i, &current_block);
+		size_t entry_count = ivector_get_count(current_block);
 
-		for (size_t j = 0; j < current_block->count; j++)
+		//Skip NULL/empty entry lists
+		if (entry_count == 0)
+			continue;
+
+		memory_entry *first_entry = ivector_get(current_block, 0);
+		if (first_entry->old_ptr == NULL)
+			continue;
+
+		for (size_t j = 0; j < entry_count; j++)
 		{
-			memory_entry *current_entry = current_block->data[j];
+			memory_entry *current_entry = ivector_get(current_block, j);
 			last_size = current_entry->size;
 
 			if (current_entry->type == ENTRY_FREE)
@@ -326,78 +341,94 @@ static vector_t *find_lost_blocks(size_t *total_size)
 
 		if (!freed)
 		{
-			vector_append(blocks, current_block);
+			ivector_append(blocks, current_block);
 			size += last_size;
 		}
 	}
 
 	*total_size = size;
-	vector_destroy(entry_lists);
+	ivector_destroy(entry_lists);
 
 	return blocks;
 }
-static void print_missing_frees(vector_t *lost_blocks)
+/// @brief Prints table for missing frees
+/// @param lost_blocks ivector<ivector_t<memory_entry>*> containing lost blocks, returned by find_lost_blocks
+static void print_missing_frees(ivector_t *lost_blocks)
 {
-	if (lost_blocks->count == 0)
+	size_t block_count = ivector_get_count(lost_blocks);
+	if (block_count == 0)
 	{
 		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
 		printf("| No missing frees.                                                    |\n");
 		return;
 	}
 
-	for (size_t i = 0; i < lost_blocks->count; i++)
+	for (size_t i = 0; i < block_count; i++)
 	{
-		vector_t *entries = lost_blocks->data[i];
-		if (!entries->count) continue;
-		memory_entry *entry = entries->data[entries->count - 1];
+		//ivector_t<memory_entry>
+		ivector_t *entries = ivector_get(lost_blocks, i);
+		size_t entry_count = ivector_get_count(entries);
+		if (entry_count == 0) continue;
+		memory_entry *entry = ivector_get(entries, entry_count - 1);
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
-		printf("|Block #%-5ld: %-6s, has %-5ld entries:                              |\n", i, format_size(entry->size), entries->count); //REVIEW: Block number
+		printf("|Block #%-5ld: %-6s, has %-5ld entries:                              |\n", i, format_size(entry->size), entry_count); //REVIEW: Block number
 
 		set_color(COLOR_RED, COLOR_DEFAULT, 0);
-		for (size_t j = 0; j < entries->count; j++)
+		for (size_t j = 0; j < entry_count; j++)
 		{
-			entry = entries->data[j];
+			entry = ivector_get(entries, j);
 			printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
 		}
 	}
 }
 
-static void find_zero_re_allocs(vector_t **alloc_vector, vector_t **realloc_vector)
+/// @brief Finds zero-sized alloc/reallocs
+/// @param alloc_vector Pointer to store the ivector<ivector_t<memory_entry>*> with zero-sized m/callocs
+/// @param realloc_vector Pointer to store the ivector<ivector_t<memory_entry>*> with zero-sized reallocs
+static void find_zero_re_allocs(ivector_t **alloc_vector, ivector_t **realloc_vector)
 {
-	vector_t *allocs = vector_create();
-	vector_t *reallocs = vector_create();
-	vector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
+	//ivector<ivector_t<memory_entry>*>
+	ivector_t *allocs = ivector_create(sizeof(memory_entry));
+	//ivector<ivector_t<memory_entry>*>
+	ivector_t *reallocs = ivector_create(sizeof(memory_entry));
+	//ivector_t<ivector_t<memory_entry>*>
+	ivector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
 
-	for (size_t i = 0; i < entry_lists->count; i++)
+	size_t block_count = ivector_get_count(entry_lists);
+	for (size_t i = 0; i < block_count; i++)
 	{
-		vector_t *current_block = entry_lists->data[i];
+		ivector_t *current_block = ivector_get(entry_lists, i);
 
-		for (size_t j = 0; j < current_block->count; j++)
+		size_t entry_count = ivector_get_count(current_block);
+		for (size_t j = 0; j < entry_count; j++)
 		{
-			memory_entry *current_entry = current_block->data[j];
+			memory_entry *current_entry = ivector_get(current_block, j);
 
 			if ((current_entry->type == ENTRY_MALLOC || current_entry->type == ENTRY_CALLOC) && current_entry->size == 0)
 			{
-				vector_append(allocs, current_block);
+				ivector_append(allocs, current_block);
 				break;
 			}
 			else if (current_entry->type == ENTRY_REALLOC && current_entry->size == 0)
 			{
-				vector_append(reallocs, current_block);
+				ivector_append(reallocs, current_block);
 				break;
 			}
 		}
 	}
 
-	vector_destroy(entry_lists);
+	ivector_destroy(entry_lists);
 
 	*alloc_vector = allocs;
 	*realloc_vector = reallocs;
 }
-static void print_zero_allocs(vector_t *alloc_vector)
+/// @brief Prints tablefor zero-sized allocs
+/// @param alloc_vector ivector<ivector_t<memory_entry>*> containing zero-sized m/callocs, returned by find_zero_re_allocs
+static void print_zero_allocs(ivector_t *alloc_vector)
 {
-	if (alloc_vector->count == 0)
+	size_t block_count = ivector_get_count(alloc_vector);
+	if (block_count == 0)
 	{
 		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
 		printf("| No zero-sized allocs.                                                |\n");
@@ -407,17 +438,19 @@ static void print_zero_allocs(vector_t *alloc_vector)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===Zero-sized allocs===                                              |\n");
 
-	for (size_t i = 0; i < alloc_vector->count; i++)
+	for (size_t i = 0; i < block_count; i++)
 	{
-		vector_t *entries = alloc_vector->data[i];
+		//ivector_t<memory_entry>
+		ivector_t *entries = ivector_get(alloc_vector, i);
+		size_t entry_count = ivector_get_count(entries);
 		memory_entry *entry;
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
-		printf("|Block #%-5ld has %-5ld entries:                                       |\n", i, entries->count);  //REVIEW: Block number
+		printf("|Block #%-5ld has %-5ld entries:                                       |\n", i, entry_count);  //REVIEW: Block number
 
-		for (size_t j = 0; j < entries->count; j++)
+		for (size_t j = 0; j < entry_count; j++)
 		{
-			entry = entries->data[j];
+			entry = ivector_get(entries, j);
 			if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size == 0)
 			{
 				set_color(COLOR_RED, COLOR_DEFAULT, 0);
@@ -431,9 +464,12 @@ static void print_zero_allocs(vector_t *alloc_vector)
 		}
 	}
 }
-static void print_zero_reallocs(vector_t *realloc_vector)
+/// @brief Prints tablefor zero-sized reallocs
+/// @param alloc_vector ivector<ivector_t<memory_entry>*> containing zero-sized reallocs, returned by find_zero_re_allocs
+static void print_zero_reallocs(ivector_t *realloc_vector)
 {
-	if (realloc_vector->count == 0)
+	size_t block_count = ivector_get_count(realloc_vector);
+	if (block_count == 0)
 	{
 		set_color(COLOR_GREEN, COLOR_DEFAULT, 0);
 		printf("| No zero-sized reallocs.                                              |\n");
@@ -443,17 +479,18 @@ static void print_zero_reallocs(vector_t *realloc_vector)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===Zero-sized reallocs===                                            |\n");
 
-	for (size_t i = 0; i < realloc_vector->count; i++)
+	for (size_t i = 0; i < block_count; i++)
 	{
-		vector_t *entries = realloc_vector->data[i];
+		ivector_t *entries = ivector_get(realloc_vector, i);
+		size_t entry_count = ivector_get_count(entries);
 		memory_entry *entry;
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
-		printf("|Block #%-5ld has %-5ld entries:                                       |\n", i, entries->count);  //REVIEW: Block number
+		printf("|Block #%-5ld has %-5ld entries:                                       |\n", i, entry_count);  //REVIEW: Block number
 
-		for (size_t j = 0; j < entries->count; j++)
+		for (size_t j = 0; j < entry_count; j++)
 		{
-			entry = entries->data[j];
+			entry = ivector_get(entries, j);
 			if (entry->type == ENTRY_REALLOC && entry->size == 0)
 			{
 				set_color(COLOR_RED, COLOR_DEFAULT, 0);
@@ -468,14 +505,14 @@ static void print_zero_reallocs(vector_t *realloc_vector)
 	}
 }
 
-static void find_failed_re_allocs(size_t *failed_alloc_c, vector_t **failed_reallocs)
+static void find_failed_re_allocs(size_t *failed_alloc_c, ivector_t **failed_reallocs)
 {
 	//REVIEW: Ignore zero-sized ops that return NULL, shown separately
 
-	vector_t *reallocs = vector_create();
+	ivector_t *reallocs = ivector_create();
 	size_t alloc_c = 0;
 
-	vector_t *null_block = hashtable_get(status.entry_lookup, NULL);
+	ivector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
 	for (size_t i = 0; i < null_block->count; i++)
 	{
@@ -484,11 +521,11 @@ static void find_failed_re_allocs(size_t *failed_alloc_c, vector_t **failed_real
 		if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size != 0) alloc_c++;
 	}
 
-	vector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
+	ivector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
 
 	for (size_t i = 0; i < entry_lists->count; i++)
 	{
-		vector_t *cur_block = entry_lists->data[i];
+		ivector_t *cur_block = entry_lists->data[i];
 
 		for (size_t j = 0; j < cur_block->count; j++)
 		{
@@ -496,13 +533,13 @@ static void find_failed_re_allocs(size_t *failed_alloc_c, vector_t **failed_real
 
 			if (entry->type == ENTRY_REALLOC && entry->size != 0 && entry->new_ptr == NULL)
 			{
-				vector_append(reallocs, cur_block);
+				ivector_append(reallocs, cur_block);
 				break;
 			}
 		}
 	}
 
-	vector_destroy(entry_lists);
+	ivector_destroy(entry_lists);
 
 	*failed_alloc_c = alloc_c;
 	*failed_reallocs = reallocs;
@@ -519,7 +556,7 @@ static void print_failed_allocs(size_t failed_alloc_c)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===Failed allocs===                                                  |\n");
 
-	vector_t *failed_allocs = hashtable_get(status.entry_lookup, NULL);
+	ivector_t *failed_allocs = hashtable_get(status.entry_lookup, NULL);
 
 	set_color(COLOR_RED, COLOR_DEFAULT, 0);
 	for (size_t i = 0; i < failed_allocs->count; i++)
@@ -530,7 +567,7 @@ static void print_failed_allocs(size_t failed_alloc_c)
 			printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->new_ptr, format_file_line(entry->file_name, entry->line));
 	}
 }
-static void print_failed_reallocs(vector_t *failed_reallocs)
+static void print_failed_reallocs(ivector_t *failed_reallocs)
 {
 	if (failed_reallocs->count == 0)
 	{
@@ -544,7 +581,7 @@ static void print_failed_reallocs(vector_t *failed_reallocs)
 
 	for (size_t i = 0; i < failed_reallocs->count; i++)
 	{
-		vector_t *entries = failed_reallocs->data[i];
+		ivector_t *entries = failed_reallocs->data[i];
 		memory_entry *entry;
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
@@ -571,7 +608,7 @@ static void find_null_reallocs_frees(size_t *null_reallocs, size_t *null_frees)
 {
 	size_t reallocc = 0, freec = 0;
 
-	vector_t *null_block = hashtable_get(status.entry_lookup, NULL);
+	ivector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
 	for (size_t i = 0; i < null_block->count; i++)
 	{
@@ -596,7 +633,7 @@ static void print_null_reallocs(size_t null_reallocs)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===NULL reallocs===                                                  |\n");
 
-	vector_t *null_block = hashtable_get(status.entry_lookup, NULL);
+	ivector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
 	set_color(COLOR_RED, COLOR_DEFAULT, 0);
 	for (size_t i = 0; i < null_block->count; i++)
@@ -619,7 +656,7 @@ static void print_null_frees(size_t null_frees)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===NULL frees===                                                     |\n");
 
-	vector_t *null_block = hashtable_get(status.entry_lookup, NULL);
+	ivector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
 	set_color(COLOR_RED, COLOR_DEFAULT, 0);
 	for (size_t i = 0; i < null_block->count; i++)
@@ -711,13 +748,13 @@ void report_alloc_checks()
 	size_t frees = status.frees->count;
 
 	size_t memory_lost;
-	vector_t *lost_blocks = find_lost_blocks(&memory_lost);
+	ivector_t *lost_blocks = find_lost_blocks(&memory_lost);
 
-	vector_t *zero_allocs, *zero_reallocs;
+	ivector_t *zero_allocs, *zero_reallocs;
 	find_zero_re_allocs(&zero_allocs, &zero_reallocs);
 	
 	size_t failed_alloc_c;
-	vector_t *failed_reallocs;
+	ivector_t *failed_reallocs;
 	find_failed_re_allocs(&failed_alloc_c, &failed_reallocs);
 
 	size_t null_reallocs, null_frees;
@@ -753,10 +790,10 @@ void report_alloc_checks()
 	printf("+======================================================================+\n");
 	set_color(COLOR_DEFAULT, COLOR_DEFAULT, 0);
 
-	vector_destroy(lost_blocks);
-	vector_destroy(zero_allocs);
-	vector_destroy(zero_reallocs);
-	vector_destroy(failed_reallocs);
+	ivector_destroy(lost_blocks);
+	ivector_destroy(zero_allocs);
+	ivector_destroy(zero_reallocs);
+	ivector_destroy(failed_reallocs);
 }
 
 void list_all_entries()
@@ -791,9 +828,9 @@ void cleanup_alloc_checks()
 	for (size_t i = 0; i < status.frees->count; i++)
 		destroy_memory_entry(status.frees->data[i]);
 
-	vector_destroy(status.allocs);
-	vector_destroy(status.reallocs);
-	vector_destroy(status.frees);
+	ivector_destroy(status.allocs);
+	ivector_destroy(status.reallocs);
+	ivector_destroy(status.frees);
 	hashtable_destroy(status.entry_lookup);
 
 	status.allocs = NULL;
