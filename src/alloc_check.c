@@ -173,15 +173,12 @@ memory_entry *create_memory_entry(int type, void *old_ptr, void *new_ptr, size_t
 {
 	memory_entry *entry = malloc(sizeof(memory_entry));
 	DIE_NULL(entry);
-	char *name = malloc(strlen(file_name) + 1);
-	DIE_NULL(name);
-	strcpy(name, file_name);
 
 	entry->type = type;
 	entry->old_ptr = old_ptr;
 	entry->new_ptr = new_ptr;
 	entry->size = size;
-	entry->file_name = name;
+	entry->file_name = file_name;
 	entry->line = line;
 	entry->tick = ++status.tick;
 
