@@ -187,7 +187,6 @@ memory_entry *create_memory_entry(int type, void *old_ptr, void *new_ptr, size_t
 
 void destroy_memory_entry(memory_entry *entry)
 {
-	free(entry->file_name);
 	free(entry);
 }
 
