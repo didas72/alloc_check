@@ -169,18 +169,17 @@ static void init_checker()
 
 
 
-memory_entry *create_memory_entry(int type, void *old_ptr, void *new_ptr, size_t size, char *file_name, int line)
+memory_entry create_memory_entry(int type, void *old_ptr, void *new_ptr, size_t size, char *file_name, int line)
 {
-	memory_entry *entry = malloc(sizeof(memory_entry));
-	DIE_NULL(entry);
+	memory_entry entry = { 0 };
 
-	entry->type = type;
-	entry->old_ptr = old_ptr;
-	entry->new_ptr = new_ptr;
-	entry->size = size;
-	entry->file_name = file_name;
-	entry->line = line;
-	entry->tick = ++status.tick;
+	entry.type = type;
+	entry.old_ptr = old_ptr;
+	entry.new_ptr = new_ptr;
+	entry.size = size;
+	entry.file_name = file_name;
+	entry.line = line;
+	entry.tick = ++status.tick;
 
 	return entry;
 }
@@ -196,9 +195,6 @@ char *entry_type_str(int type)
 
 
 
-//TODO: Review need/location of diagnostics. Also not portable with other compilers
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuse-after-free"
 void *checked_malloc(size_t size, char *file_name, int line)
 {
 	init_checker();
@@ -208,10 +204,10 @@ void *checked_malloc(size_t size, char *file_name, int line)
 	//REVIEW: Pointer reuse after free handling?
 	//ivector_t<memory_entry>
 	ivector_t *entry_vec = ivector_create(sizeof(memory_entry));
-	memory_entry *entry = create_memory_entry(ENTRY_MALLOC, NULL, ptr, size, file_name, line); //FIXME: Memory leaked
-	ivector_append(entry_vec, entry);
+	memory_entry entry = create_memory_entry(ENTRY_MALLOC, NULL, ptr, size, file_name, line);
+	ivector_append(entry_vec, &entry);
 	hashtable_add(status.entry_lookup, ptr, entry_vec);
-	ivector_append(status.allocs, entry); //Add to alloc list
+	ivector_append(status.allocs, &entry); //Add to alloc list
 
 	return ptr;
 }
@@ -226,30 +222,32 @@ void *checked_calloc(size_t nitems, size_t size, char *file_name, int line)
 	//REVIEW: Move logic to separate function to reuse for malloc/calloc
 	//ivector_t<memory_entry>
 	ivector_t *entry_vec = ivector_create(sizeof(memory_entry));
-	memory_entry *entry = create_memory_entry(ENTRY_CALLOC, NULL, ptr, size, file_name, line);
-	ivector_append(entry_vec, entry);
+	memory_entry entry = create_memory_entry(ENTRY_CALLOC, NULL, ptr, size, file_name, line);
+	ivector_append(entry_vec, &entry);
 	hashtable_add(status.entry_lookup, ptr, entry_vec);
-	ivector_append(status.allocs, entry); //Add to alloc list
+	ivector_append(status.allocs, &entry); //Add to alloc list
 
 	return ptr;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuse-after-free"
 void *checked_realloc(void *ptr, size_t size, char *file_name, int line)
 {
 	init_checker();
 
 	void *new_ptr = realloc(ptr, size);
 	
-	memory_entry *entry = create_memory_entry(ENTRY_REALLOC, ptr, new_ptr, size, file_name, line);
+	memory_entry entry = create_memory_entry(ENTRY_REALLOC, ptr, new_ptr, size, file_name, line);
 
 	if (!ptr)
 	{
 		ivector_t *null_entries = hashtable_get(status.entry_lookup, NULL); //Hopefully won't ever return NULL
-		ivector_append(null_entries, entry);
+		ivector_append(null_entries, &entry);
 		return new_ptr;
 	}
 
-	ivector_append(status.reallocs, entry);
+	ivector_append(status.reallocs, &entry);
 
 	//ivector_t<memory_entry>
 	ivector_t *pointer_entries;
@@ -257,7 +255,7 @@ void *checked_realloc(void *ptr, size_t size, char *file_name, int line)
 	if (!new_ptr) //if returned NULL, keep pointer to check for future frees
 	{
 		pointer_entries = hashtable_get(status.entry_lookup, ptr);
-		ivector_append(pointer_entries, entry);
+		ivector_append(pointer_entries, &entry);
 		return new_ptr;
 	}
 	if (hashtable_remove(status.entry_lookup, ptr, NULL, (void**)&pointer_entries) != SUS_SUCCESS)
@@ -266,7 +264,7 @@ void *checked_realloc(void *ptr, size_t size, char *file_name, int line)
 		pointer_entries = ivector_create(sizeof(memory_entry));
 		fprintf(stderr, "ALLOC_CHECK WARN: checked_realloc received ptr not used before. This might be a problem with your code or with the library. Please analyze the report carefully and send it to the developer if you believe this is a library problem.\n");
 	}
-	ivector_append(pointer_entries, entry);
+	ivector_append(pointer_entries, &entry);
 	hashtable_add(status.entry_lookup, new_ptr, pointer_entries);
 
 	return new_ptr;
@@ -278,12 +276,12 @@ void checked_free(void *ptr, char *file_name, int line)
 
 	free(ptr);
 
-	memory_entry *entry = create_memory_entry(ENTRY_FREE, ptr, NULL, 0, file_name, line);
-	ivector_append(status.frees, entry);
+	memory_entry entry = create_memory_entry(ENTRY_FREE, ptr, NULL, 0, file_name, line);
+	ivector_append(status.frees, &entry);
 
 	//REVIEW: Free on bad pointer?
 	ivector_t *pointer_entries = hashtable_get(status.entry_lookup, ptr);
-	ivector_append(pointer_entries, entry);
+	ivector_append(pointer_entries, &entry);
 
 	//In most cases, block won't be touched after free, so we can trim to reduce memory usage
 	ivector_trim(pointer_entries);
@@ -319,7 +317,7 @@ static ivector_t *find_lost_blocks(size_t *total_size)
 			continue;
 
 		memory_entry *first_entry = ivector_get(current_block, 0);
-		if (first_entry->old_ptr == NULL)
+		if (first_entry->new_ptr == NULL)
 			continue;
 
 		for (size_t j = 0; j < entry_count; j++)
@@ -336,7 +334,7 @@ static ivector_t *find_lost_blocks(size_t *total_size)
 
 		if (!freed)
 		{
-			ivector_append(blocks, current_block);
+			ivector_append(blocks, &current_block);
 			size += last_size;
 		}
 	}
@@ -361,7 +359,8 @@ static void print_missing_frees(ivector_t *lost_blocks)
 	for (size_t i = 0; i < block_count; i++)
 	{
 		//ivector_t<memory_entry>
-		ivector_t *entries = ivector_get(lost_blocks, i);
+		ivector_t *entries;
+		ivector_fetch(lost_blocks, i, &entries);
 		size_t entry_count = ivector_get_count(entries);
 		if (entry_count == 0) continue;
 		memory_entry *entry = ivector_get(entries, entry_count - 1);
@@ -384,16 +383,18 @@ static void print_missing_frees(ivector_t *lost_blocks)
 static void find_zero_re_allocs(ivector_t **alloc_vector, ivector_t **realloc_vector)
 {
 	//ivector_t<ivector_t<memory_entry>*>
-	ivector_t *allocs = ivector_create(sizeof(memory_entry));
+	ivector_t *allocs = ivector_create(sizeof(ivector_t*));
 	//ivector_t<ivector_t<memory_entry>*>
-	ivector_t *reallocs = ivector_create(sizeof(memory_entry));
+	ivector_t *reallocs = ivector_create(sizeof(ivector_t*));
 	//ivector_t<ivector_t<memory_entry>*>
 	ivector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
 
 	size_t block_count = ivector_get_count(entry_lists);
 	for (size_t i = 0; i < block_count; i++)
 	{
-		ivector_t *current_block = ivector_get(entry_lists, i);
+		//ivector_t<memory_entry>
+		ivector_t *current_block;
+		ivector_fetch(entry_lists, i, &current_block);
 
 		size_t entry_count = ivector_get_count(current_block);
 		for (size_t j = 0; j < entry_count; j++)
@@ -402,12 +403,12 @@ static void find_zero_re_allocs(ivector_t **alloc_vector, ivector_t **realloc_ve
 
 			if ((current_entry->type == ENTRY_MALLOC || current_entry->type == ENTRY_CALLOC) && current_entry->size == 0)
 			{
-				ivector_append(allocs, current_block);
+				ivector_append(allocs, &current_block);
 				break;
 			}
 			else if (current_entry->type == ENTRY_REALLOC && current_entry->size == 0)
 			{
-				ivector_append(reallocs, current_block);
+				ivector_append(reallocs, &current_block);
 				break;
 			}
 		}
@@ -436,16 +437,16 @@ static void print_zero_allocs(ivector_t *alloc_vector)
 	for (size_t i = 0; i < block_count; i++)
 	{
 		//ivector_t<memory_entry>
-		ivector_t *entries = ivector_get(alloc_vector, i);
+		ivector_t *entries;
+		ivector_fetch(alloc_vector, i, &entries);
 		size_t entry_count = ivector_get_count(entries);
-		memory_entry *entry;
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 		printf("|Block #%-5ld has %-5ld entries:                                       |\n", i, entry_count);  //REVIEW: Block number
 
 		for (size_t j = 0; j < entry_count; j++)
 		{
-			entry = ivector_get(entries, j);
+			memory_entry *entry = ivector_get(entries, j);
 			if ((entry->type == ENTRY_MALLOC || entry->type == ENTRY_CALLOC) && entry->size == 0)
 			{
 				set_color(COLOR_RED, COLOR_DEFAULT, 0);
@@ -476,16 +477,17 @@ static void print_zero_reallocs(ivector_t *realloc_vector)
 
 	for (size_t i = 0; i < block_count; i++)
 	{
-		ivector_t *entries = ivector_get(realloc_vector, i);
+		//ivector_t<memory_entry>
+		ivector_t *entries;
+		ivector_fetch(realloc_vector, i, &entries);
 		size_t entry_count = ivector_get_count(entries);
-		memory_entry *entry;
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 		printf("|Block #%-5ld has %-5ld entries:                                       |\n", i, entry_count);  //REVIEW: Block number
 
 		for (size_t j = 0; j < entry_count; j++)
 		{
-			entry = ivector_get(entries, j);
+			memory_entry *entry = ivector_get(entries, j);
 			if (entry->type == ENTRY_REALLOC && entry->size == 0)
 			{
 				set_color(COLOR_RED, COLOR_DEFAULT, 0);
@@ -523,13 +525,14 @@ static void find_failed_re_allocs(size_t *failed_alloc_c, ivector_t **failed_rea
 	}
 
 	//ivector_t<ivector_t<memory_entry>*>
-	ivector_t *entry_lists = hashtable_list_contents(status.entry_lookup);
+	ivector_t *entry_lists = hashtable_list_contents(status.entry_lookup); //FIXME: Hashtables return vector, not ivector
 
 	size_t block_count = ivector_get_count(entry_lists);
 	for (size_t i = 0; i < block_count; i++)
 	{
 		//ivector_t<memory_entry>
-		ivector_t *cur_block = ivector_get(entry_lists, i);
+		ivector_t *cur_block;
+		ivector_fetch(entry_lists, i, &cur_block);
 
 		size_t entry_count = ivector_get_count(cur_block);
 		for (size_t j = 0; j < entry_count; j++)
@@ -538,7 +541,7 @@ static void find_failed_re_allocs(size_t *failed_alloc_c, ivector_t **failed_rea
 
 			if (entry->type == ENTRY_REALLOC && entry->size != 0 && entry->new_ptr == NULL)
 			{
-				ivector_append(reallocs, cur_block);
+				ivector_append(reallocs, &cur_block);
 				break;
 			}
 		}
@@ -563,6 +566,7 @@ static void print_failed_allocs(size_t failed_alloc_c)
 	set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
 	printf("| ===Failed allocs===                                                  |\n");
 
+	//ivector_t<memory_entry>
 	ivector_t *failed_allocs = hashtable_get(status.entry_lookup, NULL);
 
 	set_color(COLOR_RED, COLOR_DEFAULT, 0);
@@ -593,7 +597,8 @@ static void print_failed_reallocs(ivector_t *failed_reallocs)
 	for (size_t i = 0; i < block_count; i++)
 	{
 		//ivector_t<memory_entry>
-		ivector_t *entries = ivector_get(failed_reallocs, i);
+		ivector_t *entries;
+		ivector_fetch(failed_reallocs, i, &entries);
 		size_t entry_count = ivector_get_count(entries);
 
 		set_color(COLOR_WHITE, COLOR_DEFAULT, 0);
@@ -848,7 +853,8 @@ void cleanup_alloc_checks()
 	ivector_destroy(status.allocs);
 	ivector_destroy(status.reallocs);
 	ivector_destroy(status.frees);
-	hashtable_destroy(status.entry_lookup);
+
+	hashtable_destroy_free(status.entry_lookup, NULL, ivector_destroy);
 
 	status.allocs = NULL;
 	status.reallocs = NULL;
