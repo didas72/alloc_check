@@ -281,6 +281,7 @@ void checked_free(void *ptr, char *file_name, int line)
 	memory_entry *entry = create_memory_entry(ENTRY_FREE, ptr, NULL, 0, file_name, line);
 	ivector_append(status.frees, entry);
 
+	//REVIEW: Free on bad pointer?
 	ivector_t *pointer_entries = hashtable_get(status.entry_lookup, ptr);
 	ivector_append(pointer_entries, entry);
 
@@ -615,15 +616,20 @@ static void print_failed_reallocs(ivector_t *failed_reallocs)
 	}
 }
 
+/// @brief Finds reallocs and frees of NULL. While allowed, might be unintended
+/// @param null_reallocs Pointer to store number of NULL reallocs
+/// @param null_frees Pointer to store number of NULL frees
 static void find_null_reallocs_frees(size_t *null_reallocs, size_t *null_frees)
 {
 	size_t reallocc = 0, freec = 0;
 
+	//ivector_t<memory_entry>
 	ivector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
-	for (size_t i = 0; i < null_block->count; i++)
+	size_t entry_count = ivector_get_count(null_block);
+	for (size_t i = 0; i < entry_count; i++)
 	{
-		memory_entry *entry = null_block->data[i];
+		memory_entry *entry = ivector_get(null_block, i);
 
 		if (entry->type == ENTRY_FREE) freec++;
 		else if (entry->type == ENTRY_REALLOC) reallocc++;
@@ -632,6 +638,8 @@ static void find_null_reallocs_frees(size_t *null_reallocs, size_t *null_frees)
 	*null_reallocs = reallocc;
 	*null_frees = freec;
 }
+/// @brief Prints table for NULL reallocs
+/// @param null_reallocs The number of NULL reallocs
 static void print_null_reallocs(size_t null_reallocs)
 {
 	if (null_reallocs == 0)
@@ -647,14 +655,17 @@ static void print_null_reallocs(size_t null_reallocs)
 	ivector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
 	set_color(COLOR_RED, COLOR_DEFAULT, 0);
-	for (size_t i = 0; i < null_block->count; i++)
+	size_t block_count = ivector_get_count(null_block);
+	for (size_t i = 0; i < block_count; i++)
 	{
-		memory_entry *entry = null_block->data[i];
+		memory_entry *entry = ivector_get(null_block, i);
 
 		if (entry->type == ENTRY_REALLOC && entry->old_ptr == NULL)
 			printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->old_ptr, format_file_line(entry->file_name, entry->line));
 	}
 }
+/// @brief Prints table for NULL frees
+/// @param null_frees The number of NULL frees
 static void print_null_frees(size_t null_frees)
 {
 	if (null_frees == 0)
@@ -670,9 +681,10 @@ static void print_null_frees(size_t null_frees)
 	ivector_t *null_block = hashtable_get(status.entry_lookup, NULL);
 
 	set_color(COLOR_RED, COLOR_DEFAULT, 0);
-	for (size_t i = 0; i < null_block->count; i++)
+	size_t block_count = ivector_get_count(null_block);
+	for (size_t i = 0; i < block_count; i++)
 	{
-		memory_entry *entry = null_block->data[i];
+		memory_entry *entry = ivector_get(null_block, i);
 
 		if (entry->type == ENTRY_FREE && entry->old_ptr == NULL)
 			printf("|>>> %-7s %6s @%-18p at %-25s<<<|\n", entry_type_str(entry->type), format_size(entry->size), entry->old_ptr, format_file_line(entry->file_name, entry->line));
